@@ -20,9 +20,13 @@ function pwaRegisterStub(): Plugin {
 }
 
 export default defineConfig({
-  // Relative paths so the same dist/ works from a web server AND from an
-  // Android WebView origin when this is later wrapped with Capacitor.
-  base: './',
+  // Relative by default, so the same dist/ works from a plain web server AND
+  // from an Android WebView origin when this is later wrapped with Capacitor.
+  //
+  // CI overrides it for GitHub Pages, where the site is served from a project
+  // sub-path: the bundle and models resolve fine either way, but the service
+  // worker's navigation fallback needs an absolute path to behave.
+  base: process.env.VITE_BASE ?? './',
   build: {
     target: 'es2020',
     sourcemap: !singleFile,

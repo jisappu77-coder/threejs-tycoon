@@ -1,0 +1,73 @@
+name: Deploy to GitHub Pages
+
+# Pushes to the default branch publish the game; pull requests get the same
+# checks without publishing.
+on:
+  push:
+    branches: [claude/dev]
+  pull_request:
+  # Lets the deploy be re-run by hand — useful the first time, after enabling
+  # Pages in repo settings, without needing an empty commit.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  # deploy-pages authenticates over OIDC and fails without this.
+  id-token: write
+
+# Never cancel a deploy that is already publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # A broken build should never reach the live URL.
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+
+      - name: Build for GitHub Pages
+        # The site lives at /<repo>/, not at the domain root.
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      # A self-contained single-page copy, downloadable from the run summary.
+      # This is how the game gets shared for one-off testing.
+      - name: Build single-file copy
+        run: npm run build:single
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: highway-tycoon-single-file
+          path: dist/highway-tycoon.html
+          if-no-files-found: error
+
+  deploy:
+    needs: build
+    # Pull requests run the checks above but do not publish.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -10,6 +10,9 @@ surface, markings, upgrade pads and the fuel island are still generated procedur
 code, because no kit ships a fuel station and the world-space UI has to match the game's
 own palette.
 
+**Play it:** https://jisappu77-coder.github.io/threejs-tycoon/ — deployed from `claude/dev`
+on every push by `.github/workflows/deploy.yml`.
+
 ## Running it
 
 ```bash
@@ -95,6 +98,25 @@ then steps it down if frame times stay bad. The tier controls pixel ratio, shado
 count and how many distant vehicles exist. A fully built-out scene is roughly 145 draw
 calls and 58k triangles: repeated props and all scenery are drawn as `InstancedMesh`,
 materials are shared per atlas, and geometry is cached and reused.
+
+## Deployment
+
+`.github/workflows/deploy.yml` typechecks, lints, tests and builds on every push to
+`claude/dev`, then publishes `dist/` to GitHub Pages. Pull requests run the same checks
+without publishing. Each run also attaches a self-contained `highway-tycoon.html` as a
+downloadable artifact.
+
+Two settings have to be right for the deploy to work, and neither can be set from CI:
+
+- The repo must be **public**, unless the account has GitHub Pro/Team — Pages is not
+  available for private repos on the free plan.
+- **Settings → Pages → Source** must be set to **GitHub Actions**. If it is not, the
+  deploy job fails with a "Pages not enabled" error; fix the setting and re-run the
+  workflow (it has a `workflow_dispatch` trigger for exactly this).
+
+The site is served from a project sub-path (`/threejs-tycoon/`), so CI builds with
+`VITE_BASE=/threejs-tycoon/`. Locally and for the Capacitor build, `base` stays relative
+(`./`) — see the comment in `vite.config.ts`.
 
 ## Android APK
 
