@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
-    "build:single": "SINGLE_FILE=1 vite build && node tools/single-file.mjs",
+    "build:single": "SINGLE_FILE=1 vite build && node tools/embed-models.mjs dist/models dist/models && node tools/single-file.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

@@ -82,6 +82,18 @@ interface ModelSpec {
 
 const BASE = import.meta.env.BASE_URL ?? './';
 
+/**
+ * The single-file build inlines every model as a data URI on this global (see
+ * tools/single-file.mjs), because a one-page build has nowhere to serve `.glb`
+ * files from. When it is present the loader reads from it instead of the
+ * network.
+ */
+type InlineModels = Record<string, string>;
+function inlineSource(url: string): string | null {
+  const inlined = (window as Window & { __HT_MODELS?: InlineModels }).__HT_MODELS;
+  return inlined?.[url] ?? null;
+}
+
 const MODELS: Record<ModelId, ModelSpec> = {
   // Kenney's vehicles are modelled facing +Z; the game drives along +X.
   boxTruck: { url: 'cars/delivery.glb', length: 8.6, turn: Math.PI / 2 },
@@ -231,7 +243,9 @@ export async function loadAssets(onProgress?: (ratio: number) => void): Promise<
   await Promise.all(
     entries.map(async ([id, spec]) => {
       try {
-        const gltf = await loader.loadAsync(`${BASE}models/${spec.url}`);
+        const gltf = await loader.loadAsync(
+          inlineSource(spec.url) ?? `${BASE}models/${spec.url}`,
+        );
         loaded.set(id, { root: prepare(gltf.scene, spec), spec });
       } catch (error) {
         // A missing model must not take the whole game down: callers fall back
