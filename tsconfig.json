@@ -20,7 +20,7 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": false,
 
-    "types": ["vite/client", "vite-plugin-pwa/client", "vitest/globals"]
+    "types": ["node", "vite/client", "vite-plugin-pwa/client", "vitest/globals"]
   },
   "include": ["src", "vite.config.ts", "eslint.config.js"]
 }

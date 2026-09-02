@@ -17,7 +17,13 @@ npm run preview    # serve the production build (add --host to open it on a phon
 npm run test       # unit tests (Vitest, no WebGL needed)
 npm run lint
 npm run typecheck
+
+npm run build:single   # one self-contained HTML page, for sharing a playable link
 ```
+
+`build:single` inlines the styles and bundle into `dist/highway-tycoon.html` so the game
+can be hosted as a single page. It swaps the PWA plugin for a stub, since a service worker
+cannot register from an embedded context — the normal `npm run build` is unaffected.
 
 ## Playing it
 

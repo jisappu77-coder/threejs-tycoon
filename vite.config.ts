@@ -1,5 +1,23 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+
+/**
+ * SINGLE_FILE=1 builds a bundle meant to be inlined into one HTML page (see
+ * tools/single-file.mjs) for sharing a playable link. A service worker cannot
+ * be registered from that context, so the PWA plugin is swapped for a stub
+ * that satisfies the `virtual:pwa-register` import.
+ */
+const singleFile = process.env.SINGLE_FILE === '1';
+
+function pwaRegisterStub(): Plugin {
+  const id = 'virtual:pwa-register';
+  return {
+    name: 'pwa-register-stub',
+    resolveId: (source) => (source === id ? `\0${id}` : null),
+    load: (resolved) =>
+      resolved === `\0${id}` ? 'export function registerSW() {}' : null,
+  };
+}
 
 export default defineConfig({
   // Relative paths so the same dist/ works from a web server AND from an
@@ -7,9 +25,10 @@ export default defineConfig({
   base: './',
   build: {
     target: 'es2020',
-    sourcemap: true,
+    sourcemap: !singleFile,
+    ...(singleFile ? { rollupOptions: { output: { inlineDynamicImports: true } } } : {}),
   },
-  plugins: [
+  plugins: singleFile ? [pwaRegisterStub()] : [
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg'],
