@@ -43,7 +43,7 @@ export const HIGHWAY = {
   ambientCount: { low: 14, medium: 26, high: 40 },
 } as const;
 
-export type VehicleKind = 'truck' | 'car' | 'van' | 'bus';
+export type VehicleKind = 'truck' | 'car' | 'van' | 'hauler';
 
 export interface VehicleSpec {
   kind: VehicleKind;
@@ -67,11 +67,12 @@ export const VEHICLES: Record<VehicleKind, VehicleSpec> = {
     serviceMultiplier: 1,
     customer: true,
   },
-  bus: {
-    kind: 'bus',
-    speed: 15,
-    weight: 1.2,
-    payMultiplier: 1.5,
+  // A flatbed hauler: the big-ticket customer. Slower to serve, pays best.
+  hauler: {
+    kind: 'hauler',
+    speed: 14,
+    weight: 1.4,
+    payMultiplier: 1.6,
     serviceMultiplier: 1.4,
     customer: true,
   },

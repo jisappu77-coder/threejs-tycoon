@@ -1,13 +1,17 @@
 import { Group, Scene, type Camera } from 'three';
 import { UPGRADES, type UpgradeDef } from '../data/config';
 import { buildPad, type Pad } from '../render/meshes/pads';
-import { buildCashPile, buildWorker } from '../render/meshes/structures';
+import {
+  buildCashPile,
+  buildWorker,
+  type WorkerParts,
+} from '../render/meshes/structures';
 import type { CashDrop, TruckStop } from '../sim/TruckStop';
 import type { Picker } from '../input/Picker';
 
 interface WorkerView {
-  group: Group;
-  /** Bay the attendant is currently standing at, if any. */
+  parts: WorkerParts;
+  /** Station the attendant covers. */
   stationId: string;
   phase: number;
 }
@@ -59,16 +63,21 @@ export class StopView {
     const hires = this.stop.progression.levelOf('worker');
     while (this.workers.length > hires) {
       const w = this.workers.pop();
-      if (w) this.scene.remove(w.group);
+      if (w) this.scene.remove(w.parts.group);
     }
     while (this.workers.length < hires) {
       const index = this.workers.length;
-      const group = buildWorker();
+      const parts = buildWorker(index);
       // The first hire works the pumps; later hires cover the canteen.
       const station = this.stop.stations[index === 0 ? 0 : 1] ?? this.stop.stations[0]!;
-      group.position.set(station.def.x + (index % 2 === 0 ? -5 : 5), 0, station.def.z + 5);
-      this.scene.add(group);
-      this.workers.push({ group, stationId: station.id, phase: index * 1.7 });
+      parts.group.position.set(
+        station.def.x + (index % 2 === 0 ? -5.5 : 5.5),
+        0,
+        station.def.z + 2.6,
+      );
+      parts.group.rotation.y = index % 2 === 0 ? 0.6 : -0.6;
+      this.scene.add(parts.group);
+      this.workers.push({ parts, stationId: station.id, phase: index * 1.7 });
     }
   }
 
@@ -110,10 +119,15 @@ export class StopView {
     for (const worker of this.workers) {
       const station = this.stop.station(worker.stationId);
       const busy = station?.bays.some((b) => b.vehicle?.state === 'servicing') ?? false;
-      worker.phase += dt * (busy ? 5 : 1.4);
-      // A busy attendant bobs briskly; an idle one just shifts their weight.
-      worker.group.position.y = busy ? Math.abs(Math.sin(worker.phase)) * 0.25 : 0;
-      worker.group.rotation.y = Math.sin(worker.phase * 0.35) * 0.6;
+      worker.phase += dt * (busy ? 6 : 1.5);
+      const swing = Math.sin(worker.phase);
+      // Busy: arms pumping and a bob. Idle: a slow weight shift.
+      const reach = busy ? 1 : 0.18;
+      worker.parts.arms[0]!.rotation.x = swing * 0.9 * reach;
+      worker.parts.arms[1]!.rotation.x = -swing * 0.9 * reach;
+      worker.parts.legs[0]!.rotation.x = swing * 0.25 * reach;
+      worker.parts.legs[1]!.rotation.x = -swing * 0.25 * reach;
+      worker.parts.group.position.y = busy ? Math.abs(swing) * 0.09 : 0;
     }
   }
 

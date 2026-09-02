@@ -286,3 +286,38 @@ button.primary:disabled {
 #boot.hidden {
   display: none;
 }
+
+/* Loading screen shown while the 3D models download. */
+.boot-inner {
+  max-width: 320px;
+}
+
+.boot-inner h1 {
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--cash);
+}
+
+.boot-inner p {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: var(--ink-dim);
+}
+
+.boot-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.boot-bar i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: var(--go);
+  transition: width 0.2s ease;
+}

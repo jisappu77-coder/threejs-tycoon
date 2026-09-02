@@ -3,16 +3,21 @@ import { HIGHWAY, VEHICLES, type VehicleKind } from '../data/config';
 import type { Rng } from '../core/Rng';
 import { Vehicle } from '../sim/Vehicle';
 import type { TruckStop } from '../sim/TruckStop';
-import { buildVehicle } from '../render/meshes/vehicles';
+import { ambientShell, buildVehicle, type VehicleParts } from '../render/meshes/vehicles';
 import { ProgressBar } from '../render/meshes/indicators';
-import { box } from '../render/meshes/geometry';
 import { PALETTE, mat } from '../render/materials';
 import type { Picker } from '../input/Picker';
 import type { QualityTier } from '../render/Renderer';
 
 interface VehicleView {
-  group: Group;
+  parts: VehicleParts;
   bar: ProgressBar;
+  /** Accumulated wheel rotation, so wheels turn with distance travelled. */
+  spin: number;
+  /** Phase offset so vehicles do not all bob in lockstep. */
+  bobPhase: number;
+  lastX: number;
+  lastZ: number;
 }
 
 const KINDS = Object.keys(VEHICLES) as VehicleKind[];
@@ -34,6 +39,7 @@ export class Traffic {
   private ambientSpeed: number[] = [];
   private ambientLane: number[] = [];
   private dummy = new Object3D();
+  private clock = 0;
 
   constructor(
     private readonly scene: Scene,
@@ -50,7 +56,7 @@ export class Traffic {
       this.scene.remove(this.ambient);
       this.ambient.dispose();
     }
-    this.ambient = new InstancedMesh(box(4.6, 1.7, 2.0), mat(PALETTE.lineWhite), count);
+    this.ambient = new InstancedMesh(ambientShell(), mat(PALETTE.lineWhite), count);
     this.ambient.castShadow = false;
     this.ambient.receiveShadow = false;
     this.ambientX = [];
@@ -85,21 +91,30 @@ export class Traffic {
     );
     this.vehicles.push(v);
 
-    const group = buildVehicle(kind, v.colorIndex);
+    const parts = buildVehicle(kind, v.colorIndex);
     const bar = new ProgressBar();
-    bar.group.position.y = 4.4;
-    group.add(bar.group);
-    group.position.set(v.x, 0, v.z);
-    this.scene.add(group);
-    this.views.set(v.id, { group, bar });
-    this.picker.register(group, 'vehicle', v.id);
+    // Above the fuel canopy, so the service bar is never hidden by the roof
+    // the vehicle is parked under.
+    bar.group.position.y = kind === 'truck' || kind === 'hauler' ? 6.4 : 4.6;
+    parts.group.add(bar.group);
+    parts.group.position.set(v.x, 0, v.z);
+    this.scene.add(parts.group);
+    this.views.set(v.id, {
+      parts,
+      bar,
+      spin: 0,
+      bobPhase: this.rng.range(0, Math.PI * 2),
+      lastX: v.x,
+      lastZ: v.z,
+    });
+    this.picker.register(parts.group, 'vehicle', v.id);
   }
 
   private recycle(v: Vehicle): void {
     const view = this.views.get(v.id);
     if (view) {
-      this.picker.unregister(view.group);
-      this.scene.remove(view.group);
+      this.picker.unregister(view.parts.group);
+      this.scene.remove(view.parts.group);
       this.views.delete(v.id);
     }
     this.stop.forget(v);
@@ -152,12 +167,31 @@ export class Traffic {
   }
 
   /** Per-frame view sync. Separate from `update` so it runs once per frame. */
-  render(camera: Parameters<ProgressBar['faceCamera']>[0]): void {
+  render(camera: Parameters<ProgressBar['faceCamera']>[0], dt: number): void {
+    this.clock += dt;
     for (const v of this.vehicles) {
       const view = this.views.get(v.id);
       if (!view) continue;
-      view.group.position.set(v.x, 0, v.z);
-      view.group.rotation.y = v.heading;
+      const { group } = view.parts;
+      group.position.set(v.x, 0, v.z);
+      group.rotation.y = v.heading;
+
+      // Wheels turn with distance actually travelled, not with time, so they
+      // stop dead when the vehicle does.
+      const travelled = Math.hypot(v.x - view.lastX, v.z - view.lastZ);
+      view.lastX = v.x;
+      view.lastZ = v.z;
+      view.spin += travelled / 0.5;
+      for (const wheel of view.parts.wheels) wheel.rotation.x = view.spin;
+
+      // A slight suspension bob while rolling sells the weight of a truck.
+      const moving = travelled > 0.001;
+      view.parts.body.position.y = moving
+        ? Math.sin(this.clock * 9 + view.bobPhase) * 0.035
+        : 0;
+      view.parts.body.rotation.z = moving
+        ? Math.sin(this.clock * 6.2 + view.bobPhase) * 0.006
+        : 0;
 
       const showBar = v.state === 'servicing' && !v.serviceComplete;
       view.bar.show(showBar);
@@ -183,6 +217,6 @@ export class Traffic {
 
   /** World position of a vehicle's mesh, for camera focus and effects. */
   viewOf(id: string): Group | undefined {
-    return this.views.get(id)?.group;
+    return this.views.get(id)?.parts.group;
   }
 }

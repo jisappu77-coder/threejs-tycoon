@@ -4,6 +4,7 @@ import { Emitter } from './Events';
 import { Rng } from './Rng';
 import { IsoCamera } from '../render/IsoCamera';
 import { Renderer } from '../render/Renderer';
+import { PostFx } from '../render/PostFx';
 import { Picker } from '../input/Picker';
 import { TouchControls } from '../input/TouchControls';
 import { Economy } from '../sim/Economy';
@@ -28,6 +29,7 @@ export class Game {
 
   private renderer: Renderer;
   private camera: IsoCamera;
+  private post: PostFx;
   private picker = new Picker();
   private controls: TouchControls;
   private world: World;
@@ -68,6 +70,14 @@ export class Game {
       this.renderer.tier,
     );
 
+    this.post = new PostFx(
+      this.renderer.gl,
+      this.world.scene,
+      this.camera.camera,
+      this.renderer.tier,
+    );
+    this.renderer.onResize = () => this.post.resize();
+
     this.controls = new TouchControls(canvas, this.camera);
     this.bindInput();
     this.bindStopHooks();
@@ -75,6 +85,7 @@ export class Game {
     this.renderer.onTier((tier) => {
       this.world.setTier(tier);
       this.traffic.setTier(tier);
+      this.post?.setTier(tier);
     });
 
     window.addEventListener('visibilitychange', this.onVisibility);
@@ -241,9 +252,9 @@ export class Game {
     this.camera.update(frameSeconds);
     this.world.update(frameSeconds);
     this.stopView.update(frameSeconds, this.camera.camera);
-    this.traffic.render(this.camera.camera);
+    this.traffic.render(this.camera.camera, frameSeconds);
     this.camera.setAspect(this.renderer.aspect);
-    this.renderer.render(this.world.scene, this.camera.camera);
+    this.post.render();
 
     this.renderer.sampleFrame(performance.now() - frameStart, this.clock.elapsed);
   };

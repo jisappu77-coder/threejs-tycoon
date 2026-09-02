@@ -4,8 +4,11 @@ A 3D truck-stop tycoon built for Android mobile web. You start with one fuel pum
 lonely highway; trucks pull in, you serve them by hand, they pay, and you spend the cash
 on physical upgrades that visibly grow the stop until it owns the road.
 
-Built with Vite + TypeScript + three.js. All 3D art is procedural low-poly geometry
-generated in code — there is no asset pipeline and nothing to download but the bundle.
+Built with Vite + TypeScript + three.js. The 3D art is Kenney's CC0 (public-domain)
+low-poly kits, vendored in `public/models/` — see `public/models/CREDITS.md`. The road
+surface, markings, upgrade pads and the fuel island are still generated procedurally in
+code, because no kit ships a fuel station and the world-space UI has to match the game's
+own palette.
 
 ## Running it
 
@@ -46,8 +49,10 @@ To wipe your save, run `game.reset()` in the browser console.
 ```
 src/
   core/     Game loop, fixed-timestep clock, typed event emitter, seeded RNG
-  render/   Renderer + quality tiers, isometric camera rig, lighting, shared
-            materials, and the procedural mesh builders in render/meshes/
+  render/   Renderer + quality tiers, isometric camera rig, three-light rig,
+            post-processing (grade/vignette, tier-gated bloom), the glTF asset
+            loader in assets.ts, procedural textures, and the remaining
+            procedural mesh builders in render/meshes/
   world/    Terrain and structures (World), the stop's dynamic props (StopView),
             and two-tier highway traffic (Traffic)
   sim/      The game itself: Vehicle state machine, ServiceStation, TruckStop,
@@ -65,13 +70,31 @@ frame. Systems tick in a deliberate order: input → traffic → stop → view s
 payouts, upgrade costs, queue capacity and camera limits. Adding an upgrade means adding a
 row to `UPGRADES`, not writing code.
 
+## Art and assets
+
+Models load once at boot (`src/render/assets.ts`) behind a progress bar. The loader does
+two things that matter:
+
+- **Normalises** each model to a declared world-space size from its real bounding box, by
+  height for tall things (trees, poles, people) and by length for everything else — so no
+  hand-tuned scale numbers to break when a kit is updated.
+- **Deduplicates materials** to one Lambert per colour atlas. Each Kenney kit ships its
+  own `colormap.png`, so the share is per atlas; folding them together would paint every
+  model with the wrong colours.
+
+Kenney's Nature Kit foliage is a cool mint that clashes with this game's grass, so those
+few materials are remapped by name to the game palette (`NATURE_PALETTE`). Note also that
+the Car Kit has no articulated truck — the customer fleet is box trucks, pickups, vans
+and flatbeds, and each model's paint colour is fixed by its atlas UVs, so variety comes
+from using several models rather than from tinting one.
+
 ## Mobile performance
 
 The renderer picks a quality tier at boot from device memory, core count and pixel count,
 then steps it down if frame times stay bad. The tier controls pixel ratio, shadows, tree
-count and how many distant vehicles exist. The scene is kept to a few dozen draw calls by
-sharing one material per colour, caching geometry, and drawing repeated props (trees, road
-dashes, distant traffic) as `InstancedMesh`.
+count and how many distant vehicles exist. A fully built-out scene is roughly 145 draw
+calls and 58k triangles: repeated props and all scenery are drawn as `InstancedMesh`,
+materials are shared per atlas, and geometry is cached and reused.
 
 ## Android APK
 

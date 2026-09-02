@@ -1,4 +1,4 @@
-import { Color, Fog, Group, Scene } from 'three';
+import { Fog, Group, InstancedMesh, Matrix4, Object3D, Scene } from 'three';
 import { HIGHWAY, STATIONS, WORLD } from '../data/config';
 import { Rng } from '../core/Rng';
 import { createLighting } from '../render/Lighting';
@@ -9,18 +9,17 @@ import {
   buildGround,
   buildHighway,
   buildScatter,
+  buildSky,
+  buildStain,
 } from '../render/meshes/terrain';
-import {
-  buildCanteen,
-  buildFuelStation,
-  buildSign,
-} from '../render/meshes/structures';
+import { buildCanteen, buildFuelStation, buildSign } from '../render/meshes/structures';
+import { meshOf, model, type ModelId } from '../render/assets';
 import type { TruckStop } from '../sim/TruckStop';
 
-const TREES = { low: 90, medium: 180, high: 300 } as const;
+const TREES = { low: 70, medium: 150, high: 260 } as const;
 
 /**
- * The static scene: ground, highway, scenery, boundary hills, and the physical
+ * The static scene: sky, ground, highway, scenery, boundary and the physical
  * structures of the stop. Structures appear when their station is unlocked, so
  * buying an upgrade visibly changes the world rather than a number on a menu.
  */
@@ -29,28 +28,28 @@ export class World {
   private structures = new Map<string, Group>();
   private scatter: Group;
   private applyLightTier: (tier: QualityTier) => void;
+  private seed: number;
 
   constructor(
     private readonly stop: TruckStop,
     tier: QualityTier,
     seed = 20260902,
   ) {
+    this.seed = seed;
     const rng = new Rng(seed);
-    this.scene.background = new Color(WORLD.skyColor);
-    this.scene.fog = new Fog(WORLD.skyColor, WORLD.fogNear, WORLD.fogFar);
+    // Fog tinted to the sky's horizon band, so distant hills dissolve into the
+    // sky instead of stopping against it.
+    this.scene.fog = new Fog(0xa9c8e0, 85, 210);
 
     this.applyLightTier = createLighting(this.scene);
+    this.scene.add(buildSky());
     this.scene.add(buildGround());
     this.scene.add(buildHighway());
     this.scene.add(buildBoundary(rng));
 
     this.scatter = buildScatter(rng, TREES[tier]);
     this.scene.add(this.scatter);
-
-    // Roadside totem, so the stop announces itself from down the highway.
-    const sign = buildSign();
-    sign.position.set(-26, 0, -19);
-    this.scene.add(sign);
+    this.scene.add(this.dressing(rng));
 
     for (const def of STATIONS) {
       const group = def.id === 'canteen' ? buildCanteen() : buildFuelStation();
@@ -61,11 +60,117 @@ export class World {
 
       for (const bay of def.bays) {
         const marking = buildBayMarking();
-        marking.position.set(bay.x, 0.18, bay.z);
+        marking.position.set(bay.x, 0, bay.z);
         this.scene.add(marking);
       }
     }
     this.refresh();
+  }
+
+  /**
+   * Yard clutter, from the Kenney city kits. A working truck stop is not a
+   * clean slab — the containers, tanks, cones and fencing are what make the
+   * lot look used rather than newly poured.
+   */
+  private dressing(rng: Rng): Group {
+    const g = new Group();
+
+    // Repeated props are collected and drawn instanced: a run of 20 poles and
+    // barriers as individual meshes is 20+ draw calls for scenery nobody looks
+    // at closely.
+    const batches = new Map<ModelId, Matrix4[]>();
+    const dummy = new Object3D();
+    const place = (
+      id: ModelId,
+      x: number,
+      z: number,
+      rotation = 0,
+      scale = 1,
+    ): void => {
+      dummy.position.set(x, 0, z);
+      dummy.rotation.set(0, rotation, 0);
+      dummy.scale.setScalar(scale);
+      dummy.updateMatrix();
+      const list = batches.get(id);
+      if (list) list.push(dummy.matrix.clone());
+      else batches.set(id, [dummy.matrix.clone()]);
+    };
+
+    const flush = (): void => {
+      for (const [id, transforms] of batches) {
+        const parts = meshOf(id);
+        if (parts.length === 0) {
+          // Model missing: fall back to real clones so nothing silently vanishes.
+          for (const matrix of transforms) {
+            const prop = model(id);
+            if (!prop) break;
+            prop.applyMatrix4(matrix);
+            g.add(prop);
+          }
+          continue;
+        }
+        for (const { geometry, material } of parts) {
+          const mesh = new InstancedMesh(geometry, material, transforms.length);
+          transforms.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
+          mesh.instanceMatrix.needsUpdate = true;
+          mesh.castShadow = false;
+          mesh.receiveShadow = true;
+          g.add(mesh);
+        }
+      }
+    };
+
+    const sign = buildSign();
+    sign.position.set(-26, 0, -19);
+    g.add(sign);
+
+    // Power poles marching along the far verge, giving the highway depth.
+    for (let x = -110; x <= 110; x += 26) {
+      place('pole', x, HIGHWAY.z - 13, Math.PI / 2);
+    }
+    // Street lights along the forecourt edge.
+    for (const x of [-30, -6, 18]) place('streetLight', x, -15.5, Math.PI);
+
+    // Barriers marking the back edge of the lot.
+    for (let x = -20; x <= 30; x += 5) place('barrier', x, 16.6);
+
+    // Working clutter.
+    place('tank', -25, 11.5, 0.4);
+    place('container', 25, 12.5, 0.2);
+    place('container', 27.5, 8, 1.6, 0.9);
+    place('dumpster', -27, 6, 0.9);
+    place('cone', -14.5, -8.5);
+    place('cone', 4, -8.6);
+    place('cone', 21, 9);
+    place('cone', -13.2, -8.2);
+
+    // Bushes softening the edge where tarmac meets grass.
+    for (let i = 0; i < 18; i++) {
+      const side = i % 2 === 0 ? 17.8 : -16.2;
+      place(
+        i % 3 === 0 ? 'bush' : 'bushLarge',
+        rng.range(-32, 34),
+        side + rng.range(-1.4, 1.4),
+        rng.range(0, Math.PI * 2),
+        rng.range(0.8, 1.5),
+      );
+    }
+
+    // Oil stains where vehicles stand the longest.
+    for (const [x, z, r] of [
+      [-9, -4.5, 1.5],
+      [-9, 4.5, 1.3],
+      [9, -1, 1.4],
+      [-18, -10, 1.1],
+      [-25, -10, 0.9],
+    ] as const) {
+      const stain = buildStain(r);
+      stain.position.set(x + rng.range(-0.6, 0.6), 0.2, z + rng.range(-0.6, 0.6));
+      g.add(stain);
+    }
+
+    flush();
+    return g;
   }
 
   /** Shows or hides structures to match what has been bought. */
@@ -85,7 +190,7 @@ export class World {
   setTier(tier: QualityTier): void {
     this.applyLightTier(tier);
     this.scene.remove(this.scatter);
-    this.scatter = buildScatter(new Rng(20260902), TREES[tier]);
+    this.scatter = buildScatter(new Rng(this.seed), TREES[tier]);
     this.scene.add(this.scatter);
   }
 
@@ -109,6 +214,10 @@ export class World {
 
   static get highwayLaneZ(): number {
     return HIGHWAY.z + HIGHWAY.laneOffset;
+  }
+
+  static get groundHalf(): number {
+    return WORLD.groundHalf;
   }
 }
 

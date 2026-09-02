@@ -1,4 +1,10 @@
-import { PCFSoftShadowMap, Scene, WebGLRenderer, type Camera } from 'three';
+import {
+  ACESFilmicToneMapping,
+  PCFSoftShadowMap,
+  Scene,
+  WebGLRenderer,
+  type Camera,
+} from 'three';
 
 export type QualityTier = 'low' | 'medium' | 'high';
 
@@ -29,6 +35,11 @@ export class Renderer {
     this.gl.setPixelRatio(this.pixelRatioFor(this.tier));
     this.gl.shadowMap.enabled = this.tier !== 'low';
     this.gl.shadowMap.type = PCFSoftShadowMap;
+    // Filmic tone mapping keeps the warm key light from blowing out to flat
+    // white and rolls the shadows off gently, which is most of the difference
+    // between "3D primitives" and "a lit scene".
+    this.gl.toneMapping = ACESFilmicToneMapping;
+    this.gl.toneMappingExposure = 1.12;
     this.resize();
     window.addEventListener('resize', this.resize);
     window.addEventListener('orientationchange', this.resize);
@@ -46,8 +57,12 @@ export class Renderer {
     return 1;
   }
 
+  /** Called after a resize so the post chain can match the new backbuffer. */
+  onResize?: () => void;
+
   private resize = (): void => {
     this.gl.setSize(window.innerWidth, window.innerHeight, false);
+    this.onResize?.();
   };
 
   get aspect(): number {
