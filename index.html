@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#12161d" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Highway Tycoon</title>
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <div id="ui" aria-live="polite">
+      <div id="hud-top">
+        <div class="pill" id="cash-pill">
+          <span class="pill-icon">$</span><span id="cash-value">0</span>
+        </div>
+        <div class="pill" id="level-pill">
+          <span class="pill-icon">★</span><span id="level-value">Roadside Stop</span>
+        </div>
+      </div>
+
+      <div id="hint">Drag to look around · Tap a truck and hold to serve it</div>
+
+      <div id="toasts"></div>
+
+      <div id="panel" class="hidden" role="dialog" aria-modal="true">
+        <button id="panel-close" aria-label="Close">×</button>
+        <h2 id="panel-title">Upgrade</h2>
+        <p id="panel-desc"></p>
+        <div id="panel-stats"></div>
+        <button id="panel-buy" class="primary"></button>
+      </div>
+
+      <div id="boot" class="hidden"></div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
