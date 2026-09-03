@@ -1,4 +1,4 @@
-import { Group, Mesh, Object3D, type BufferGeometry } from 'three';
+import { Group, Mesh, Object3D } from 'three';
 import { rbox } from './geometry';
 import { PALETTE, mat } from '../materials';
 import { findByName, model, type ModelId } from '../assets';
@@ -67,11 +67,6 @@ export function buildVehicle(kind: VehicleKind, colorIndex: number): VehiclePart
 
   const wheels = findByName(loaded, (name) => name.startsWith('wheel'));
   return { group, body, wheels };
-}
-
-/** A simplified shell for distant instanced traffic. */
-export function ambientShell(): BufferGeometry {
-  return rbox(4.8, 1.8, 2.1, 0.35);
 }
 
 /** Rough length of each vehicle, used for queue spacing and bay offsets. */

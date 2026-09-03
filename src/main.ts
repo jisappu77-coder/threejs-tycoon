@@ -1,6 +1,9 @@
 import { registerSW } from 'virtual:pwa-register';
 import { Game } from './core/Game';
 import { loadAssets } from './render/assets';
+import { loadEnvironment } from './render/environment';
+import { loadSurfaces } from './render/surfaces';
+import { WebGLRenderer } from 'three';
 import './ui/style.css';
 
 const canvas = document.getElementById('game');
@@ -21,11 +24,23 @@ async function main(): Promise<void> {
   // loading screen is a real step rather than a flash.
   showBoot('<div class="boot-inner"><h1>Highway Tycoon</h1><p id="boot-status">Loading the highway…</p><div class="boot-bar"><i id="boot-fill"></i></div></div>');
   const fill = document.getElementById('boot-fill');
-  await loadAssets((ratio) => {
-    if (fill) fill.style.width = `${Math.round(ratio * 100)}%`;
-  });
+  await Promise.all([
+    loadAssets((ratio) => {
+      // Models are the bulk of the bytes, so they drive the visible progress.
+      if (fill) fill.style.width = `${Math.round(ratio * 90)}%`;
+    }),
+    loadSurfaces(),
+  ]);
+  if (fill) fill.style.width = '100%';
 
-  const game = new Game(canvas);
+  // The environment map needs a renderer to prefilter against. A throwaway one
+  // keeps this off the Game constructor's critical path and is disposed
+  // immediately; the resulting PMREM texture is independent of it.
+  const probe = new WebGLRenderer({ antialias: false });
+  const environment = await loadEnvironment(probe);
+  probe.dispose();
+
+  const game = new Game(canvas, environment);
   game.start();
   boot?.classList.add('hidden');
   // Handy from the browser console during development.

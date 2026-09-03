@@ -20,14 +20,18 @@ import {
   grassTexture,
   tiled,
 } from '../textures';
+import { surfaceMaterial } from '../surfaces';
 import { HIGHWAY, WORLD } from '../../data/config';
 import type { Rng } from '../../core/Rng';
 import { meshOf, type ModelId } from '../assets';
 
 /** Textured ground plane. Still one quad — it is always fully covered. */
 export function buildGround(): Mesh {
-  const g = new PlaneGeometry(WORLD.groundHalf * 2, WORLD.groundHalf * 2, 1, 1);
+  const size = WORLD.groundHalf * 2;
+  const g = new PlaneGeometry(size, size, 1, 1);
   g.rotateX(-Math.PI / 2);
+  // Procedural grass on purpose — see the note in surfaces.ts about why the
+  // photographic ground sets were rejected here.
   const m = new Mesh(g, texMat(grassTexture(), 0xffffff));
   m.receiveShadow = true;
   m.position.y = -0.02;
@@ -88,9 +92,13 @@ export function buildHighway(): Group {
   const paving = asphaltTexture(1, '#5b626d');
   const concreteBase = concreteTexture();
   const dirtBase = dirtTexture();
+  // Photographic asphalt where it exists, painted canvas as the fallback. The
+  // forecourt is tinted a shade lighter than the highway so the two surfaces
+  // still read as different places.
   const surface = (w: number, d: number) =>
-    texMat(tiled(road4, w, d), 0xffffff);
-  const paved = (w: number, d: number) => texMat(tiled(paving, w, d), 0xffffff);
+    surfaceMaterial('asphalt', w, d, 9) ?? texMat(tiled(road4, w, d), 0xffffff);
+  const paved = (w: number, d: number) =>
+    surfaceMaterial('asphalt', w, d, 9, 0xb9bec6) ?? texMat(tiled(paving, w, d), 0xffffff);
   const concreteFor = (w: number, d: number) =>
     texMat(tiled(concreteBase, w, d, 5), 0xffffff);
 

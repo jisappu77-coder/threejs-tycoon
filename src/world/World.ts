@@ -2,7 +2,7 @@ import { Fog, Group, InstancedMesh, Matrix4, Object3D, Scene } from 'three';
 import { HIGHWAY, STATIONS, WORLD } from '../data/config';
 import { Rng } from '../core/Rng';
 import { createLighting } from '../render/Lighting';
-import type { QualityTier } from '../render/Renderer';
+import { TIERS, type QualityTier } from '../render/Renderer';
 import {
   buildBayMarking,
   buildBoundary,
@@ -15,8 +15,6 @@ import {
 import { buildCanteen, buildFuelStation, buildSign } from '../render/meshes/structures';
 import { meshOf, model, type ModelId } from '../render/assets';
 import type { TruckStop } from '../sim/TruckStop';
-
-const TREES = { low: 70, medium: 150, high: 260 } as const;
 
 /**
  * The static scene: sky, ground, highway, scenery, boundary and the physical
@@ -47,7 +45,7 @@ export class World {
     this.scene.add(buildHighway());
     this.scene.add(buildBoundary(rng));
 
-    this.scatter = buildScatter(rng, TREES[tier]);
+    this.scatter = buildScatter(rng, TIERS[tier].trees);
     this.scene.add(this.scatter);
     this.scene.add(this.dressing(rng));
 
@@ -135,7 +133,9 @@ export class World {
     for (let x = -20; x <= 30; x += 5) place('barrier', x, 16.6);
 
     // Working clutter.
-    place('tank', -25, 11.5, 0.4);
+    // Kept to the back fence: it is a dark model, and parked near the pumps it
+    // was the first thing the opening camera framed.
+    place('tank', -34, 15.4, 0.4);
     place('container', 25, 12.5, 0.2);
     place('container', 27.5, 8, 1.6, 0.9);
     place('dumpster', -27, 6, 0.9);
@@ -190,7 +190,7 @@ export class World {
   setTier(tier: QualityTier): void {
     this.applyLightTier(tier);
     this.scene.remove(this.scatter);
-    this.scatter = buildScatter(new Rng(this.seed), TREES[tier]);
+    this.scatter = buildScatter(new Rng(this.seed), TIERS[tier].trees);
     this.scene.add(this.scatter);
   }
 

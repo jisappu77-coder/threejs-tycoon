@@ -3,7 +3,7 @@ import {
   Color,
   Group,
   Mesh,
-  MeshLambertMaterial,
+  MeshStandardMaterial,
   Object3D,
   Vector3,
   type BufferGeometry,
@@ -11,6 +11,7 @@ import {
   type Texture,
 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { inlinedUrl } from './inlined';
 
 /**
  * Loads the Kenney CC0 model kits (see public/models/CREDITS.md) and hands out
@@ -21,8 +22,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
  * 1. **Material dedup.** Every model in a Kenney kit samples that kit's shared
  *    colour atlas, but each `.glb` arrives with its own material instance.
  *    Left alone that is one material — and one shader program — per model,
- *    which breaks batching. Here they are folded into one Lambert material per
- *    atlas, so a whole kit draws with a single material.
+ *    which breaks batching. Here they are folded into one material per atlas,
+ *    so a whole kit draws with a single material.
  * 2. **Normalising.** The kits are authored at their own scale and facing, so
  *    each entry declares the length it should be in world units and the loader
  *    derives the scale from the model's real bounding box. Nothing depends on
@@ -82,18 +83,6 @@ interface ModelSpec {
 
 const BASE = import.meta.env.BASE_URL ?? './';
 
-/**
- * The single-file build inlines every model as a data URI on this global (see
- * tools/single-file.mjs), because a one-page build has nowhere to serve `.glb`
- * files from. When it is present the loader reads from it instead of the
- * network.
- */
-type InlineModels = Record<string, string>;
-function inlineSource(url: string): string | null {
-  const inlined = (window as Window & { __HT_MODELS?: InlineModels }).__HT_MODELS;
-  return inlined?.[url] ?? null;
-}
-
 const MODELS: Record<ModelId, ModelSpec> = {
   // Kenney's vehicles are modelled facing +Z; the game drives along +X.
   boxTruck: { url: 'cars/delivery.glb', length: 8.6, turn: Math.PI / 2 },
@@ -143,8 +132,35 @@ const loaded = new Map<ModelId, LoadedModel>();
  * `colormap.png`, so the key is the texture's source image — sharing globally
  * would paint every kit with whichever atlas happened to load first.
  */
-const atlasMaterials = new Map<string, MeshLambertMaterial>();
-const plainMaterials = new Map<string, MeshLambertMaterial>();
+const atlasMaterials = new Map<string, MeshStandardMaterial>();
+const plainMaterials = new Map<string, MeshStandardMaterial>();
+
+/**
+ * Surface response per material class. Everything used to be Lambert, which has
+ * no specular term at all — car paint and glass came out as matte clay however
+ * good the model was. These values are what let the environment map actually
+ * show up on a surface.
+ */
+interface Surface {
+  roughness: number;
+  metalness: number;
+}
+
+const PAINT: Surface = { roughness: 0.38, metalness: 0.1 };
+const MATTE: Surface = { roughness: 0.92, metalness: 0 };
+const FOLIAGE: Surface = { roughness: 0.85, metalness: 0 };
+const METAL: Surface = { roughness: 0.35, metalness: 0.75 };
+
+/**
+ * Kenney's atlas packs paint, glass, tyres and trim into one texture, so a
+ * per-pixel split is not available. Vehicles and props get a mild paint
+ * response, which reads correctly on bodywork and is harmless on the rest.
+ */
+function surfaceFor(name: string | undefined): Surface {
+  if (!name) return MATTE;
+  if (name in NATURE_PALETTE) return name === 'leafsGreen' || name === 'grass' ? FOLIAGE : MATTE;
+  return PAINT;
+}
 
 /** Kenney Nature Kit material name -> this game's palette. */
 const NATURE_PALETTE: Record<string, number> = {
@@ -163,7 +179,7 @@ function atlasKey(texture: Texture): string {
  * Converts a glTF's PBR materials to the cheap Lambert this game lights with,
  * and folds every atlas-textured material into one shared instance.
  */
-function adoptMaterial(source: Material): MeshLambertMaterial {
+function adoptMaterial(source: Material): MeshStandardMaterial {
   const src = source as Material & {
     map?: Texture | null;
     color?: Color;
@@ -174,7 +190,12 @@ function adoptMaterial(source: Material): MeshLambertMaterial {
     const key = atlasKey(src.map);
     let shared = atlasMaterials.get(key);
     if (!shared) {
-      shared = new MeshLambertMaterial({ map: src.map });
+      shared = new MeshStandardMaterial({
+        map: src.map,
+        roughness: PAINT.roughness,
+        metalness: PAINT.metalness,
+        envMapIntensity: 1,
+      });
       atlasMaterials.set(key, shared);
     }
     return shared;
@@ -188,7 +209,12 @@ function adoptMaterial(source: Material): MeshLambertMaterial {
   const key = remap !== undefined ? `n${remap}` : `${src.color?.getHex() ?? 'white'}`;
   let m = plainMaterials.get(key);
   if (!m) {
-    m = new MeshLambertMaterial();
+    const surface = surfaceFor(src.name);
+    m = new MeshStandardMaterial({
+      roughness: surface.roughness,
+      metalness: surface.metalness,
+      envMapIntensity: 1,
+    });
     if (remap !== undefined) {
       m.color.setHex(remap);
     } else if (src.color) {
@@ -244,7 +270,7 @@ export async function loadAssets(onProgress?: (ratio: number) => void): Promise<
     entries.map(async ([id, spec]) => {
       try {
         const gltf = await loader.loadAsync(
-          inlineSource(spec.url) ?? `${BASE}models/${spec.url}`,
+          inlinedUrl(`models/${spec.url}`) ?? `${BASE}models/${spec.url}`,
         );
         loaded.set(id, { root: prepare(gltf.scene, spec), spec });
       } catch (error) {
@@ -301,3 +327,16 @@ export function findByName(root: Object3D, test: (name: string) => boolean): Obj
 export function isLoaded(id: ModelId): boolean {
   return loaded.has(id);
 }
+
+/**
+ * Scales reflection strength across every loaded material. The low tier dials
+ * the environment down rather than dropping it, so the look degrades smoothly
+ * instead of snapping back to matte.
+ */
+export function setEnvIntensity(intensity: number): void {
+  for (const m of atlasMaterials.values()) m.envMapIntensity = intensity;
+  for (const m of plainMaterials.values()) m.envMapIntensity = intensity;
+}
+
+/** Unused-surface reference kept honest: METAL is applied via surfaceFor. */
+export const SURFACES = { PAINT, MATTE, FOLIAGE, METAL };

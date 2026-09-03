@@ -1,13 +1,14 @@
-import { Color, Group, InstancedMesh, Object3D, Scene } from 'three';
+import { Group, InstancedMesh, Object3D, Scene } from 'three';
 import { HIGHWAY, VEHICLES, type VehicleKind } from '../data/config';
 import type { Rng } from '../core/Rng';
 import { Vehicle } from '../sim/Vehicle';
 import type { TruckStop } from '../sim/TruckStop';
-import { ambientShell, buildVehicle, type VehicleParts } from '../render/meshes/vehicles';
+import { VEHICLE_LENGTH, buildVehicle, type VehicleParts } from '../render/meshes/vehicles';
 import { ProgressBar } from '../render/meshes/indicators';
-import { PALETTE, mat } from '../render/materials';
+import { buildContactShadow } from '../render/meshes/contact';
+import { meshOf, type ModelId } from '../render/assets';
 import type { Picker } from '../input/Picker';
-import type { QualityTier } from '../render/Renderer';
+import { TIERS, type QualityTier } from '../render/Renderer';
 
 interface VehicleView {
   parts: VehicleParts;
@@ -24,6 +25,14 @@ const KINDS = Object.keys(VEHICLES) as VehicleKind[];
 const MAX_INTERACTIVE = 12;
 
 /**
+ * The far lane used to be a tinted rounded box — the single most obviously
+ * cheap thing on screen, since it sits right next to the real models. It draws
+ * the actual car kit now; the pool is kept small because each model is its own
+ * draw call.
+ */
+const AMBIENT_MODELS: ModelId[] = ['sedan', 'suv', 'taxi', 'van', 'boxTruck', 'pickup'];
+
+/**
  * Two tiers of traffic. The near lane holds a handful of real `Vehicle`
  * objects that can divert into the stop; the far lane is a single instanced
  * mesh of shells that only ever move in a straight line. Distant traffic is
@@ -34,12 +43,19 @@ export class Traffic {
 
   private views = new Map<string, VehicleView>();
   private spawnTimer = 1;
-  private ambient!: InstancedMesh;
+  /**
+   * One InstancedMesh per sub-mesh of each ambient car model. Every mesh of a
+   * given model shares one instance-matrix write, so a car with a separate
+   * wheel mesh still costs one matrix update per car.
+   */
+  private ambientMeshes: { meshes: InstancedMesh[]; slots: number[] }[] = [];
+  /** Which model group each ambient slot belongs to, and its index within it. */
   private ambientX: number[] = [];
   private ambientSpeed: number[] = [];
   private ambientLane: number[] = [];
   private dummy = new Object3D();
   private clock = 0;
+  private tier: QualityTier;
 
   constructor(
     private readonly scene: Scene,
@@ -48,36 +64,66 @@ export class Traffic {
     private readonly picker: Picker,
     tier: QualityTier,
   ) {
-    this.buildAmbient(HIGHWAY.ambientCount[tier]);
+    this.tier = tier;
+    this.buildAmbient(TIERS[tier].ambientTraffic);
   }
 
   private buildAmbient(count: number): void {
-    if (this.ambient) {
-      this.scene.remove(this.ambient);
-      this.ambient.dispose();
+    for (const group of this.ambientMeshes) {
+      for (const mesh of group.meshes) {
+        this.scene.remove(mesh);
+        mesh.dispose();
+      }
     }
-    this.ambient = new InstancedMesh(ambientShell(), mat(PALETTE.lineWhite), count);
-    this.ambient.castShadow = false;
-    this.ambient.receiveShadow = false;
+    this.ambientMeshes = [];
     this.ambientX = [];
     this.ambientSpeed = [];
     this.ambientLane = [];
-    const color = new Color();
+
+    // Deal positions out along the road in even slices with jitter rather than
+    // at random: pure random placement puts cars inside each other often
+    // enough to be noticed every few seconds.
+    const westbound = Math.round(count * 0.6);
     for (let i = 0; i < count; i++) {
-      this.ambientX.push(this.rng.range(-HIGHWAY.spanX, HIGHWAY.spanX));
-      this.ambientSpeed.push(this.rng.range(14, 22));
-      // Most of the far-lane traffic runs west; a few share the near lane far
-      // from the stop so the road never looks one-directional.
-      this.ambientLane.push(this.rng.chance(0.75) ? -1 : 1);
-      color.setHex(this.rng.pick(PALETTE.carBodies));
-      this.ambient.setColorAt(i, color);
+      const lane = i < westbound ? -1 : 1;
+      const n = lane < 0 ? westbound : count - westbound;
+      const index = lane < 0 ? i : i - westbound;
+      const slice = (HIGHWAY.spanX * 2) / Math.max(n, 1);
+      const centre = -HIGHWAY.spanX + slice * (index + 0.5);
+      this.ambientX.push(centre + this.rng.range(-slice * 0.3, slice * 0.3));
+      this.ambientSpeed.push(this.rng.range(16, 20));
+      this.ambientLane.push(lane);
     }
-    if (this.ambient.instanceColor) this.ambient.instanceColor.needsUpdate = true;
-    this.scene.add(this.ambient);
+
+    // Deal the slots out across the model pool before building anything, so
+    // each InstancedMesh is allocated at exactly the size it needs.
+    const buckets = AMBIENT_MODELS.map(() => [] as number[]);
+    for (let i = 0; i < count; i++) buckets[i % AMBIENT_MODELS.length]!.push(i);
+
+    AMBIENT_MODELS.forEach((id, index) => {
+      const slots = buckets[index]!;
+      if (slots.length === 0) return;
+      const parts = meshOf(id);
+      if (parts.length === 0) return;
+      const meshes = parts.map(({ geometry, material }) => {
+        const mesh = new InstancedMesh(geometry, material, slots.length);
+        // Distant filler: it reads as traffic, not as a shadow caster, and
+        // dropping it from the shadow pass keeps the map free for the stop.
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;
+        // The highway runs the full width of the world; culling per instance
+        // against a stale bounding sphere pops cars in and out.
+        mesh.frustumCulled = false;
+        this.scene.add(mesh);
+        return mesh;
+      });
+      this.ambientMeshes.push({ meshes, slots });
+    });
   }
 
   setTier(tier: QualityTier): void {
-    this.buildAmbient(HIGHWAY.ambientCount[tier]);
+    this.tier = tier;
+    this.buildAmbient(TIERS[tier].ambientTraffic);
   }
 
   private spawn(): void {
@@ -92,6 +138,11 @@ export class Traffic {
     this.vehicles.push(v);
 
     const parts = buildVehicle(kind, v.colorIndex);
+    // Only add contact shadows where the tier can afford the extra transparent
+    // quads; the real shadow map still grounds the vehicle without them.
+    if (TIERS[this.tier].contactShadows) {
+      parts.group.add(buildContactShadow(VEHICLE_LENGTH[kind], 2.4));
+    }
     const bar = new ProgressBar();
     // Above the fuel canopy, so the service bar is never hidden by the roof
     // the vehicle is parked under.
@@ -201,18 +252,18 @@ export class Traffic {
       }
     }
 
-    for (let i = 0; i < this.ambientX.length; i++) {
-      const lane = this.ambientLane[i]!;
-      this.dummy.position.set(
-        this.ambientX[i]!,
-        0.95,
-        HIGHWAY.z - lane * HIGHWAY.laneOffset,
-      );
-      this.dummy.rotation.y = lane > 0 ? 0 : Math.PI;
-      this.dummy.updateMatrix();
-      this.ambient.setMatrixAt(i, this.dummy.matrix);
+    for (const { meshes, slots } of this.ambientMeshes) {
+      for (let n = 0; n < slots.length; n++) {
+        const i = slots[n]!;
+        const lane = this.ambientLane[i]!;
+        this.dummy.position.set(this.ambientX[i]!, 0, HIGHWAY.z - lane * HIGHWAY.laneOffset);
+        // The car kit models face +X once normalised, so westbound needs a flip.
+        this.dummy.rotation.y = lane > 0 ? 0 : Math.PI;
+        this.dummy.updateMatrix();
+        for (const mesh of meshes) mesh.setMatrixAt(n, this.dummy.matrix);
+      }
+      for (const mesh of meshes) mesh.instanceMatrix.needsUpdate = true;
     }
-    this.ambient.instanceMatrix.needsUpdate = true;
   }
 
   /** World position of a vehicle's mesh, for camera focus and effects. */

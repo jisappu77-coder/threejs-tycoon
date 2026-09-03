@@ -9,9 +9,74 @@ import {
 export type QualityTier = 'low' | 'medium' | 'high';
 
 /**
+ * What each tier actually costs. Kept as one table so every system reads the
+ * same numbers instead of each inventing its own tier rules.
+ *
+ * The guiding principle, learned the hard way: **resolution is the thing to
+ * trade, not lighting.** An earlier version disabled shadows and anti-aliasing
+ * on the low tier, which made the game look broken rather than cheap. Every
+ * tier now gets shadows and AA; the tier scales how much they cost.
+ */
+export interface TierSettings {
+  /** Cap on devicePixelRatio — by far the biggest lever on fill rate. */
+  pixelRatio: number;
+  /** Directional shadow map resolution. */
+  shadowMapSize: number;
+  /** MSAA samples on the post-processing render target. */
+  samples: number;
+  /** Scenery instance count. */
+  trees: number;
+  /** Distant instanced traffic count. */
+  ambientTraffic: number;
+  /** Bloom is a multi-pass blur; only worth it when there is headroom. */
+  bloom: boolean;
+  /**
+   * Contact shadows under objects. Screen-space AO (GTAOPass) was tried here
+   * first and crushed whole surfaces to black at this camera's depth range;
+   * baked contact blobs are cheaper and behave predictably.
+   */
+  contactShadows: boolean;
+  /** Strength of image-based lighting reflections. */
+  envIntensity: number;
+}
+
+export const TIERS: Record<QualityTier, TierSettings> = {
+  low: {
+    pixelRatio: 1.25,
+    shadowMapSize: 512,
+    samples: 0,
+    trees: 90,
+    ambientTraffic: 14,
+    bloom: false,
+    contactShadows: false,
+    envIntensity: 0.55,
+  },
+  medium: {
+    pixelRatio: 1.5,
+    shadowMapSize: 1024,
+    samples: 4,
+    trees: 170,
+    ambientTraffic: 26,
+    bloom: true,
+    contactShadows: true,
+    envIntensity: 0.85,
+  },
+  high: {
+    pixelRatio: 2,
+    shadowMapSize: 2048,
+    samples: 4,
+    trees: 260,
+    ambientTraffic: 40,
+    bloom: true,
+    contactShadows: true,
+    envIntensity: 1,
+  },
+};
+
+/**
  * Owns the WebGL context and the quality tier. The tier is guessed at boot from
- * the device, then demoted at runtime if frames are consistently slow — this is
- * the main lever that keeps cheap Android phones playable.
+ * the device, can be forced for testing, and is demoted at runtime if frames are
+ * consistently slow.
  */
 export class Renderer {
   readonly gl: WebGLRenderer;
@@ -20,29 +85,38 @@ export class Renderer {
   private onTierChange?: (tier: QualityTier) => void;
   private frameTimes: number[] = [];
   private lastDemote = 0;
+  /** A forced tier disables automatic demotion, so a test stays at its tier. */
+  private readonly forced: boolean;
 
   constructor(canvas: HTMLCanvasElement) {
-    this.tier = guessTier();
+    const forced = forcedTier();
+    this.forced = forced !== null;
+    this.tier = forced ?? guessTier();
+
     this.gl = new WebGLRenderer({
       canvas,
-      antialias: this.tier === 'high',
+      // Context-level MSAA does nothing once rendering goes through an
+      // EffectComposer render target; anti-aliasing is handled there instead
+      // via a multisampled target (see settings.samples).
+      antialias: false,
       powerPreference: 'high-performance',
       stencil: false,
-      // The scene always paints a full-screen background, so we never need the
-      // alpha channel and can let the compositor skip a blend.
       alpha: false,
     });
-    this.gl.setPixelRatio(this.pixelRatioFor(this.tier));
-    this.gl.shadowMap.enabled = this.tier !== 'low';
+    this.gl.shadowMap.enabled = true;
     this.gl.shadowMap.type = PCFSoftShadowMap;
     // Filmic tone mapping keeps the warm key light from blowing out to flat
-    // white and rolls the shadows off gently, which is most of the difference
-    // between "3D primitives" and "a lit scene".
+    // white and rolls the shadows off gently.
     this.gl.toneMapping = ACESFilmicToneMapping;
-    this.gl.toneMappingExposure = 1.12;
+    this.gl.toneMappingExposure = 1.05;
+    this.applyTier();
     this.resize();
     window.addEventListener('resize', this.resize);
     window.addEventListener('orientationchange', this.resize);
+  }
+
+  get settings(): TierSettings {
+    return TIERS[this.tier];
   }
 
   onTier(fn: (tier: QualityTier) => void): void {
@@ -50,11 +124,18 @@ export class Renderer {
     fn(this.tier);
   }
 
-  private pixelRatioFor(tier: QualityTier): number {
+  private applyTier(): void {
     const dpr = window.devicePixelRatio || 1;
-    if (tier === 'high') return Math.min(dpr, 2);
-    if (tier === 'medium') return Math.min(dpr, 1.5);
-    return 1;
+    this.gl.setPixelRatio(Math.min(dpr, this.settings.pixelRatio));
+  }
+
+  /** Switches tier at runtime. Used by the automatic demotion and by tests. */
+  setTier(tier: QualityTier): void {
+    if (tier === this.tier) return;
+    this.tier = tier;
+    this.applyTier();
+    this.resize();
+    this.onTierChange?.(tier);
   }
 
   /** Called after a resize so the post chain can match the new backbuffer. */
@@ -75,7 +156,7 @@ export class Renderer {
    * between tiers looks worse than sitting one notch low.
    */
   sampleFrame(frameMs: number, nowSeconds: number): void {
-    if (this.tier === 'low') return;
+    if (this.forced || this.tier === 'low') return;
     this.frameTimes.push(frameMs);
     if (this.frameTimes.length < 90) return;
 
@@ -86,10 +167,7 @@ export class Renderer {
     // Demote at a sustained ~28fps or worse, and only once every few seconds.
     if (median > 34 && nowSeconds - this.lastDemote > 4) {
       this.lastDemote = nowSeconds;
-      this.tier = this.tier === 'high' ? 'medium' : 'low';
-      this.gl.setPixelRatio(this.pixelRatioFor(this.tier));
-      this.gl.shadowMap.enabled = this.tier !== 'low';
-      this.onTierChange?.(this.tier);
+      this.setTier(this.tier === 'high' ? 'medium' : 'low');
     }
   }
 
@@ -104,13 +182,36 @@ export class Renderer {
   }
 }
 
+/**
+ * An explicit quality choice from `?quality=high` or a saved preference. This
+ * exists so a tier can be captured deliberately in a screenshot, and so a
+ * player can override a bad guess on their own phone.
+ */
+function forcedTier(): QualityTier | null {
+  const fromUrl = new URLSearchParams(window.location.search).get('quality');
+  const stored = safeGet('highway-tycoon:quality');
+  const value = fromUrl ?? stored;
+  return value === 'low' || value === 'medium' || value === 'high' ? value : null;
+}
+
+function safeGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Guesses a tier from the device. Deliberately does NOT demote on high pixel
+ * counts: a sharp screen is a reason to cap pixel ratio, never a reason to turn
+ * the lighting off.
+ */
 function guessTier(): QualityTier {
-  const dpr = window.devicePixelRatio || 1;
-  const px = window.innerWidth * window.innerHeight * dpr * dpr;
   const cores = navigator.hardwareConcurrency ?? 4;
   const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4;
 
-  if (cores <= 4 || mem <= 3 || px > 4_500_000) return 'low';
-  if (cores <= 6 || mem <= 6) return 'medium';
+  if (cores <= 2 || mem <= 2) return 'low';
+  if (cores <= 6 || mem <= 4) return 'medium';
   return 'high';
 }

@@ -1,10 +1,13 @@
+import type { Texture } from 'three';
 import { ECONOMY, SAVE } from '../data/config';
 import { Clock } from './Clock';
 import { Emitter } from './Events';
 import { Rng } from './Rng';
 import { IsoCamera } from '../render/IsoCamera';
-import { Renderer } from '../render/Renderer';
+import { Renderer, type QualityTier } from '../render/Renderer';
 import { PostFx } from '../render/PostFx';
+import { applyEnvironment } from '../render/environment';
+import { setEnvIntensity } from '../render/assets';
 import { Picker } from '../input/Picker';
 import { TouchControls } from '../input/TouchControls';
 import { Economy } from '../sim/Economy';
@@ -45,7 +48,7 @@ export class Game {
   private servingId: string | null = null;
   private lastLevelName = '';
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, environment: Texture | null = null) {
     this.renderer = new Renderer(canvas);
     this.camera = new IsoCamera(this.renderer.aspect);
     this.hud = new Hud(this.events);
@@ -61,6 +64,7 @@ export class Game {
     }
 
     this.world = new World(this.stop, this.renderer.tier);
+    applyEnvironment(this.world.scene, environment);
     this.stopView = new StopView(this.world.scene, this.stop, this.picker);
     this.traffic = new Traffic(
       this.world.scene,
@@ -86,6 +90,7 @@ export class Game {
       this.world.setTier(tier);
       this.traffic.setTier(tier);
       this.post?.setTier(tier);
+      setEnvIntensity(this.renderer.settings.envIntensity);
     });
 
     window.addEventListener('visibilitychange', this.onVisibility);
@@ -298,6 +303,25 @@ export class Game {
       this.start();
     }
   };
+
+  /**
+   * Forces a quality tier and remembers it. Exposed so a player can override a
+   * bad guess on their own device, and so screenshots can target a tier
+   * deliberately rather than whatever the machine happens to pick.
+   */
+  setQuality(tier: QualityTier): void {
+    try {
+      localStorage.setItem('highway-tycoon:quality', tier);
+    } catch {
+      // Private mode: the tier still applies for this session.
+    }
+    this.renderer.setTier(tier);
+  }
+
+  /** The tier actually in force, for diagnostics. */
+  get quality(): QualityTier {
+    return this.renderer.tier;
+  }
 
   /** Wipes the save and reloads. Exposed for the dev console and testing. */
   reset(): void {

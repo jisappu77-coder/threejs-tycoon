@@ -1,7 +1,7 @@
 import {
   Color,
   MeshBasicMaterial,
-  MeshLambertMaterial,
+  MeshStandardMaterial,
   type Material,
   type Texture,
 } from 'three';
@@ -12,21 +12,24 @@ import {
  * every unique material is a separate shader program and a broken batch — so
  * everything draws from here.
  *
- * Lambert rather than Standard on purpose: this is a stylised, non-metallic
- * world, and a full PBR pass buys nothing here that a texture and good
- * lighting do not, at a fraction of the fragment cost.
+ * These are `MeshStandardMaterial` so they respond to the environment map the
+ * same way the glTF models do. A scene that mixes Lambert and Standard reads as
+ * two different worlds bolted together: the Lambert half stays flat while
+ * everything around it picks up sky reflections.
  */
-const cache = new Map<string, MeshLambertMaterial>();
+const cache = new Map<string, MeshStandardMaterial>();
 
-export function mat(color: number, opts?: { flatShading?: boolean }): MeshLambertMaterial {
+export function mat(color: number, opts?: { flatShading?: boolean }): MeshStandardMaterial {
   const key = `${color}:${opts?.flatShading ? 1 : 0}`;
   let m = cache.get(key);
   if (!m) {
-    m = new MeshLambertMaterial({
+    m = new MeshStandardMaterial({
       color,
       // Smooth shading by default now that geometry is bevelled: flat shading
       // on a rounded box throws away the soft edge highlight that sells it.
       flatShading: opts?.flatShading ?? false,
+      roughness: 0.82,
+      metalness: 0.04,
     });
     cache.set(key, m);
   }
@@ -41,7 +44,7 @@ export function texMat(
   texture: Texture,
   color = 0xffffff,
   opts?: { flatShading?: boolean },
-): MeshLambertMaterial {
+): MeshStandardMaterial {
   let id = texIds.get(texture);
   if (id === undefined) {
     id = texKey++;
@@ -50,10 +53,12 @@ export function texMat(
   const key = `t${id}:${color}:${opts?.flatShading ? 1 : 0}`;
   let m = cache.get(key);
   if (!m) {
-    m = new MeshLambertMaterial({
+    m = new MeshStandardMaterial({
       map: texture,
       color,
       flatShading: opts?.flatShading ?? false,
+      roughness: 0.9,
+      metalness: 0.02,
     });
     cache.set(key, m);
   }
@@ -72,17 +77,19 @@ export function basic(color: number): MeshBasicMaterial {
   return m;
 }
 
-const emissiveCache = new Map<number, MeshLambertMaterial>();
+const emissiveCache = new Map<number, MeshStandardMaterial>();
 
 /** Lit material with an emissive lift — lamps, signs, brake lights. */
-export function glow(color: number, strength = 0.85): MeshLambertMaterial {
+export function glow(color: number, strength = 0.85): MeshStandardMaterial {
   const key = color * 100 + Math.round(strength * 10);
   let m = emissiveCache.get(key);
   if (!m) {
-    m = new MeshLambertMaterial({
+    m = new MeshStandardMaterial({
       color,
       emissive: new Color(color),
       emissiveIntensity: strength,
+      roughness: 0.6,
+      metalness: 0,
     });
     emissiveCache.set(key, m);
   }
@@ -90,11 +97,13 @@ export function glow(color: number, strength = 0.85): MeshLambertMaterial {
 }
 
 /** A cloned material — only for the few objects that animate opacity/colour. */
-export function unique(color: number, transparent = false): MeshLambertMaterial {
-  return new MeshLambertMaterial({
+export function unique(color: number, transparent = false): MeshStandardMaterial {
+  return new MeshStandardMaterial({
     color,
     transparent,
     opacity: transparent ? 0.45 : 1,
+    roughness: 0.8,
+    metalness: 0,
   });
 }
 

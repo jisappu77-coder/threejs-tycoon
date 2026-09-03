@@ -5,10 +5,11 @@ lonely highway; trucks pull in, you serve them by hand, they pay, and you spend 
 on physical upgrades that visibly grow the stop until it owns the road.
 
 Built with Vite + TypeScript + three.js. The 3D art is Kenney's CC0 (public-domain)
-low-poly kits, vendored in `public/models/` — see `public/models/CREDITS.md`. The road
-surface, markings, upgrade pads and the fuel island are still generated procedurally in
-code, because no kit ships a fuel station and the world-space UI has to match the game's
-own palette.
+low-poly kits (`public/models/`), lit by a Poly Haven CC0 HDRI (`public/env/`) and driving
+over a Poly Haven CC0 asphalt PBR set (`public/textures/`) — each directory has its own
+`CREDITS.md`. The markings, upgrade pads and the fuel island are still generated
+procedurally in code, because no kit ships a fuel station and the world-space UI has to
+match the game's own palette.
 
 **Play it:** https://jisappu77-coder.github.io/threejs-tycoon/ — deployed from `claude/dev`
 on every push by `.github/workflows/deploy.yml`.
@@ -27,8 +28,9 @@ npm run typecheck
 npm run build:single   # one self-contained HTML page, for sharing a playable link
 ```
 
-`build:single` inlines the styles and bundle into `dist/highway-tycoon.html` so the game
-can be hosted as a single page. It swaps the PWA plugin for a stub, since a service worker
+`build:single` inlines the styles, bundle and every binary asset — models, textures and
+the HDRI, as data URIs on `window.__HT_ASSETS` — into `dist/highway-tycoon.html` so the
+game can be hosted as a single page with no other files. It swaps the PWA plugin for a stub, since a service worker
 cannot register from an embedded context — the normal `npm run build` is unaffected.
 
 ## Playing it
@@ -81,9 +83,20 @@ two things that matter:
 - **Normalises** each model to a declared world-space size from its real bounding box, by
   height for tall things (trees, poles, people) and by length for everything else — so no
   hand-tuned scale numbers to break when a kit is updated.
-- **Deduplicates materials** to one Lambert per colour atlas. Each Kenney kit ships its
-  own `colormap.png`, so the share is per atlas; folding them together would paint every
-  model with the wrong colours.
+- **Deduplicates materials** to one `MeshStandardMaterial` per colour atlas. Each Kenney
+  kit ships its own `colormap.png`, so the share is per atlas; folding them together would
+  paint every model with the wrong colours.
+
+Everything is PBR and lit by an image-based environment (`src/render/environment.ts`
+prefilters the HDRI into a PMREM cube). That is what gives paint and glass something to
+reflect and stops the shadow side falling to flat black — the single biggest difference
+between this build and the earlier Lambert one. The procedural materials in
+`materials.ts` are `MeshStandardMaterial` too, so procedural and glTF meshes sit in the
+same world rather than reading as two engines bolted together.
+
+The far lane of highway traffic draws the real car models as `InstancedMesh` (one per
+model, six models). It used to be a tinted rounded box, which was the most obviously cheap
+thing on screen precisely because it sat next to the real models.
 
 Kenney's Nature Kit foliage is a cool mint that clashes with this game's grass, so those
 few materials are remapped by name to the game palette (`NATURE_PALETTE`). Note also that
@@ -93,11 +106,29 @@ from using several models rather than from tinting one.
 
 ## Mobile performance
 
-The renderer picks a quality tier at boot from device memory, core count and pixel count,
-then steps it down if frame times stay bad. The tier controls pixel ratio, shadows, tree
-count and how many distant vehicles exist. A fully built-out scene is roughly 145 draw
-calls and 58k triangles: repeated props and all scenery are drawn as `InstancedMesh`,
-materials are shared per atlas, and geometry is cached and reused.
+The renderer picks a quality tier at boot from device memory and core count, then steps it
+down if frame times stay bad. **Every tier gets shadows and image-based lighting**; the
+tier scales what they cost — pixel ratio (1.25 / 1.5 / 2), shadow map size (512 / 1024 /
+2048), MSAA samples, bloom, contact shadows, scenery density and how many distant vehicles
+exist. An earlier version switched shadows and anti-aliasing *off* on the low tier, which
+made the game look broken rather than cheap; resolution is the thing to trade.
+
+Force a tier with `?quality=low|medium|high` or `game.setQuality('high')` — the choice is
+remembered in `localStorage`. This exists so a bad guess can be overridden on a real phone,
+and so screenshots target a tier deliberately instead of whatever the machine picks.
+
+Measured on a built-out scene at a 412x915 phone viewport (scene pass only, via
+`renderer.info`):
+
+| Tier | Draw calls | Triangles | Programs | Textures |
+| --- | --- | --- | --- | --- |
+| low | 221 | 102k | 24 | 28 |
+| medium | 214 | 153k | 31 | 39 |
+| high | 213 | 214k | 31 | 38 |
+
+Repeated props and all scenery are drawn as `InstancedMesh`, materials are shared per
+atlas, and geometry is cached and reused. Total download is 6.7 MB, of which 6.3 MB is
+art (models 2.9 MB, textures 2.2 MB, HDRI 1.2 MB).
 
 ## Deployment
 

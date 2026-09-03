@@ -1,5 +1,5 @@
 import { AmbientLight, DirectionalLight, HemisphereLight, Scene } from 'three';
-import type { QualityTier } from './Renderer';
+import { TIERS, type QualityTier } from './Renderer';
 
 /**
  * A three-light stylised rig rather than a single lamp:
@@ -13,10 +13,12 @@ import type { QualityTier } from './Renderer';
  * wide shadow frustum is the classic cause of blurry, expensive mobile shadows.
  */
 export function createLighting(scene: Scene): (tier: QualityTier) => void {
-  scene.add(new HemisphereLight(0xbcd9f2, 0x6d7a52, 0.85));
-  scene.add(new AmbientLight(0xffffff, 0.18));
+  // Much weaker than before: the environment map now supplies most of the
+  // ambient. Leaving the old constants in on top of IBL washes the scene flat.
+  scene.add(new HemisphereLight(0xbcd9f2, 0x6d7a52, 0.28));
+  scene.add(new AmbientLight(0xffffff, 0.05));
 
-  const sun = new DirectionalLight(0xffe9c4, 1.85);
+  const sun = new DirectionalLight(0xffe9c4, 2.1);
   sun.position.set(-38, 44, 26);
   sun.castShadow = true;
   sun.shadow.camera.left = -48;
@@ -29,13 +31,14 @@ export function createLighting(scene: Scene): (tier: QualityTier) => void {
   sun.shadow.normalBias = 0.035;
   scene.add(sun, sun.target);
 
-  const rim = new DirectionalLight(0x9dc4ea, 0.55);
+  const rim = new DirectionalLight(0x9dc4ea, 0.3);
   rim.position.set(30, 18, -34);
   scene.add(rim);
 
   return (tier: QualityTier) => {
-    sun.castShadow = tier !== 'low';
-    const size = tier === 'high' ? 2048 : 1024;
+    // Every tier casts shadows now; the tier only sets how sharp they are.
+    sun.castShadow = true;
+    const size = TIERS[tier].shadowMapSize;
     sun.shadow.mapSize.set(size, size);
     // Force the shadow map to be rebuilt at the new size.
     sun.shadow.map?.dispose();
