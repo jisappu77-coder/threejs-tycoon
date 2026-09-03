@@ -8,6 +8,7 @@ import {
   buildBoundary,
   buildGround,
   buildHighway,
+  buildOffRoadTrack,
   buildScatter,
   buildSky,
   buildStain,
@@ -15,6 +16,7 @@ import {
 import { buildCanteen, buildFuelStation, buildSign } from '../render/meshes/structures';
 import { meshOf, model, type ModelId } from '../render/assets';
 import type { TruckStop } from '../sim/TruckStop';
+import { City } from './City';
 
 /**
  * The static scene: sky, ground, highway, scenery, boundary and the physical
@@ -25,6 +27,7 @@ export class World {
   readonly scene = new Scene();
   private structures = new Map<string, Group>();
   private scatter: Group;
+  private city: City;
   private applyLightTier: (tier: QualityTier) => void;
   private seed: number;
 
@@ -36,17 +39,25 @@ export class World {
     this.seed = seed;
     const rng = new Rng(seed);
     // Fog tinted to the sky's horizon band, so distant hills dissolve into the
-    // sky instead of stopping against it.
-    this.scene.fog = new Fog(0xa9c8e0, 85, 210);
+    // sky instead of stopping against it. The distances come from config: this
+    // used to hardcode its own, which quietly swallowed the city the moment the
+    // camera range grew past them.
+    this.scene.fog = new Fog(0xa9c8e0, WORLD.fogNear, WORLD.fogFar);
 
     this.applyLightTier = createLighting(this.scene);
     this.scene.add(buildSky());
     this.scene.add(buildGround());
     this.scene.add(buildHighway());
     this.scene.add(buildBoundary(rng));
+    this.scene.add(buildOffRoadTrack());
 
     this.scatter = buildScatter(rng, TIERS[tier].trees);
     this.scene.add(this.scatter);
+
+    // The city gets its own RNG stream so changing the scatter count does not
+    // reshuffle the skyline — the same seed has to produce the same city.
+    this.city = new City(new Rng(seed ^ 0x5c17), tier);
+    this.scene.add(this.city.group);
     this.scene.add(this.dressing(rng));
 
     for (const def of STATIONS) {
@@ -133,9 +144,9 @@ export class World {
     for (let x = -20; x <= 30; x += 5) place('barrier', x, 16.6);
 
     // Working clutter.
-    // Kept to the back fence: it is a dark model, and parked near the pumps it
-    // was the first thing the opening camera framed.
-    place('tank', -34, 15.4, 0.4);
+    // The industrial tank used to sit here. It is a very dark model and, at
+    // every camera position tried, it read as a hole in the tarmac rather than
+    // as a piece of kit — dropped rather than kept moving it somewhere else.
     place('container', 25, 12.5, 0.2);
     place('container', 27.5, 8, 1.6, 0.9);
     place('dumpster', -27, 6, 0.9);
@@ -192,10 +203,12 @@ export class World {
     this.scene.remove(this.scatter);
     this.scatter = buildScatter(new Rng(this.seed), TIERS[tier].trees);
     this.scene.add(this.scatter);
+    this.city.setTier(tier);
   }
 
   /** Advances the short "built!" animation on any newly placed structure. */
   update(dt: number): void {
+    this.city.update(dt);
     for (const group of this.structures.values()) {
       const anim = animating.get(group);
       if (anim === undefined) continue;

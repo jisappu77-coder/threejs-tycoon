@@ -26,7 +26,11 @@ export interface TierSettings {
   samples: number;
   /** Scenery instance count. */
   trees: number;
-  /** Distant instanced traffic count. */
+  /**
+   * Distant instanced traffic count. Capped by spacing rather than by cost:
+   * these cars are evenly dealt along the road, so a higher count means a
+   * shorter gap between them, and past about thirty they start to overlap.
+   */
   ambientTraffic: number;
   /** Bloom is a multi-pass blur; only worth it when there is headroom. */
   bloom: boolean;
@@ -46,7 +50,7 @@ export const TIERS: Record<QualityTier, TierSettings> = {
     shadowMapSize: 512,
     samples: 0,
     trees: 90,
-    ambientTraffic: 14,
+    ambientTraffic: 12,
     bloom: false,
     contactShadows: false,
     envIntensity: 0.55,
@@ -56,7 +60,7 @@ export const TIERS: Record<QualityTier, TierSettings> = {
     shadowMapSize: 1024,
     samples: 4,
     trees: 170,
-    ambientTraffic: 26,
+    ambientTraffic: 20,
     bloom: true,
     contactShadows: true,
     envIntensity: 0.85,
@@ -66,7 +70,7 @@ export const TIERS: Record<QualityTier, TierSettings> = {
     shadowMapSize: 2048,
     samples: 4,
     trees: 260,
-    ambientTraffic: 40,
+    ambientTraffic: 30,
     bloom: true,
     contactShadows: true,
     envIntensity: 1,

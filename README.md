@@ -2,7 +2,9 @@
 
 A 3D truck-stop tycoon built for Android mobile web. You start with one fuel pump on a
 lonely highway; trucks pull in, you serve them by hand, they pay, and you spend the cash
-on physical upgrades that visibly grow the stop until it owns the road.
+on physical upgrades that visibly grow the stop until it owns the road. Across the road is
+a city with its own street grid and traffic; behind the lot, a dirt track climbs into the
+hills.
 
 Built with Vite + TypeScript + three.js. The 3D art is Kenney's CC0 (public-domain)
 low-poly kits (`public/models/`), lit by a Poly Haven CC0 HDRI (`public/env/`) and driving
@@ -37,7 +39,7 @@ cannot register from an embedded context — the normal `npm run build` is unaff
 
 | Gesture | Action |
 | --- | --- |
-| One-finger drag | Pan the camera |
+| One-finger drag | Pan the camera — the world follows your finger |
 | Two fingers | Pinch to zoom, twist to rotate |
 | Tap a cash pile | Collect it |
 | Tap and **hold** a docked vehicle | Serve it by hand |
@@ -46,6 +48,12 @@ cannot register from an embedded context — the normal `npm run build` is unaff
 Progress saves to `localStorage` every 10 seconds and whenever the page is backgrounded.
 Once you have hired an attendant, the stop keeps earning while the game is closed — at a
 reduced rate, capped at 4 hours.
+
+The rig orbits, so panning is built from the camera's own right and forward vectors rather
+than a fixed rotation — an easy place to get a sign wrong in a way that looks correct at
+one rotation and inverted at another, which is exactly what shipped first.
+`src/render/IsoCamera.test.ts` pins it down by projecting a fixed world point through the
+camera at four different yaws and checking it moves the same way the finger did.
 
 To wipe your save, run `game.reset()` in the browser console.
 
@@ -59,9 +67,11 @@ src/
             loader in assets.ts, procedural textures, and the remaining
             procedural mesh builders in render/meshes/
   world/    Terrain and structures (World), the stop's dynamic props (StopView),
-            and two-tier highway traffic (Traffic)
+            two-tier highway traffic (Traffic), and the city grid across the
+            road with its own instanced buildings and traffic (City)
   sim/      The game itself: Vehicle state machine, ServiceStation, TruckStop,
-            Economy, Progression, Save. No three.js in here — it is all plain
+            Economy, Progression, Save, and the separation pass that keeps
+            vehicles out of each other. No three.js in here — it is all plain
             arithmetic, which is why it can be unit tested directly.
   input/    Touch/pointer gestures and a raycast picker
   ui/       DOM overlay (HUD, upgrade panel, toasts)
@@ -72,8 +82,35 @@ The simulation runs on a fixed 1/60s step with capped catch-up; rendering runs o
 frame. Systems tick in a deliberate order: input → traffic → stop → view sync → draw.
 
 **Balancing** is a single-file edit: `src/data/config.ts` holds spawn rates, service times,
-payouts, upgrade costs, queue capacity and camera limits. Adding an upgrade means adding a
-row to `UPGRADES`, not writing code.
+payouts, upgrade costs, queue capacity, camera limits and the city grid. Adding an upgrade
+means adding a row to `UPGRADES`, not writing code.
+
+## Traffic and the forecourt layout
+
+Vehicles used to drive through each other around the pumps. Two things caused it, and both
+are fixed in ways worth knowing about before moving a bay:
+
+- **Routes are authored, not derived.** Each bay in `config.ts` carries its own `approach`
+  and `exit` waypoints. The old code guessed an approach at `bay.x - 10`, which for the
+  second canteen bay landed exactly on the first one. The forecourt is laid out as parallel
+  corridors running away from the highway — exit lane, queue, canteen aisle, then the two
+  fuel lanes — spaced far enough apart that vehicles in neighbouring corridors clear each
+  other. Routes may *cross*; what they must never do is run alongside one another.
+- **`sim/separation.ts` makes vehicles give way.** Once per step, any vehicle with another
+  in the corridor directly ahead holds position. Ties (head-on, or two routes crossing) go
+  to whoever has been on the road longer, so a pair can never deadlock staring at each
+  other.
+
+Some constraints cannot be fixed by yielding and have to hold in the layout itself:
+`SERVICE.queueSpacing` must exceed the longest vehicle in `VEHICLE_FOOTPRINT`, because a
+queued vehicle has arrived and will not move out of the way. `sim/separation.test.ts`
+asserts that, and runs three minutes of full traffic checking that no two vehicles on the
+forecourt ever overlap — as oriented boxes, not as circles.
+
+Highway filler traffic is scenery with no separation logic of its own, so its spacing is a
+property of how it moves: cars are dealt along the road in even slices and every car in a
+lane runs at that lane's single speed. Per-car speeds looked better for a few seconds and
+then fell apart, as a faster car slowly reeled in the one ahead and drove through it.
 
 ## Art and assets
 
@@ -97,6 +134,18 @@ same world rather than reading as two engines bolted together.
 The far lane of highway traffic draws the real car models as `InstancedMesh` (one per
 model, six models). It used to be a tinted rounded box, which was the most obviously cheap
 thing on screen precisely because it sat next to the real models.
+
+The city across the road (`world/City.ts`) is a real grid — an avenue parallel to the
+highway, cross streets running back from it, blocks of buildings between — because the
+traffic in it has to have somewhere to go, and cars sliding across a painted backdrop
+read as fake the moment they move. Every building is instanced, so the whole skyline is a
+handful of draw calls. Kenney's `low-detail-*` variants carry the bulk of the district and
+the three full-detail towers are held back to the rear rows, which is what gives it depth.
+
+The ground is a displaced mesh (`terrainHeight` in `render/meshes/terrain.ts`), flat
+across the forecourt, highway and city — every road, bay and building is placed at y=0 and
+none of them follow a slope — and rolling once past all of that. Scenery and the off-road
+track sample the same function, so nothing floats or sinks on a hillside.
 
 Kenney's Nature Kit foliage is a cool mint that clashes with this game's grass, so those
 few materials are remapped by name to the game palette (`NATURE_PALETTE`). Note also that
@@ -122,13 +171,18 @@ Measured on a built-out scene at a 412x915 phone viewport (scene pass only, via
 
 | Tier | Draw calls | Triangles | Programs | Textures |
 | --- | --- | --- | --- | --- |
-| low | 221 | 102k | 24 | 28 |
-| medium | 214 | 153k | 31 | 39 |
-| high | 213 | 214k | 31 | 38 |
+| low | 269 | 179k | 28 | 39 |
+| medium | 264 | 250k | 35 | 50 |
+| high | 266 | 334k | 35 | 51 |
 
 Repeated props and all scenery are drawn as `InstancedMesh`, materials are shared per
-atlas, and geometry is cached and reused. Total download is 6.7 MB, of which 6.3 MB is
-art (models 2.9 MB, textures 2.2 MB, HDRI 1.2 MB).
+atlas, and geometry is cached and reused. Roughly fifty of those draw calls are the city,
+which is the price of it being a real grid with traffic rather than a backdrop.
+
+Total download is 7.4 MB, of which 7.0 MB is art (models 3.6 MB, textures 2.2 MB, HDRI
+1.2 MB). The city buildings account for the 0.7 MB the models grew by: Kenney's
+`low-detail-*` variants are 7-27 KB each, which is why a whole district of them is
+affordable, and only three full-detail towers are vendored.
 
 ## Deployment
 

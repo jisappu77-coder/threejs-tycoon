@@ -162,17 +162,23 @@ export class TruckStop {
     });
   }
 
-  private exitPath(x: number, z: number): Waypoint[] {
+  /**
+   * The shared run back to the highway. Vehicles reach it from their bay's own
+   * authored exit route, so the leg that used to be `x + 13` — a blind lunge
+   * forward that took a fuel customer straight across both canteen bays — is
+   * gone.
+   */
+  private exitPath(lead: Waypoint[]): Waypoint[] {
     return [
-      { x: x + 13, z },
+      ...lead,
       { x: HIGHWAY.exitX - 8, z: HIGHWAY.exitZ },
       { x: HIGHWAY.exitX + 10, z: HIGHWAY.z + HIGHWAY.laneOffset },
     ];
   }
 
-  private sendAway(vehicle: Vehicle): void {
+  private sendAway(vehicle: Vehicle, lead: Waypoint[] = []): void {
     vehicle.state = 'leaving';
-    vehicle.setPath(this.exitPath(vehicle.x, vehicle.z));
+    vehicle.setPath(this.exitPath(lead));
     this.hooks.onVehicleLeaving?.(vehicle);
   }
 
@@ -192,6 +198,8 @@ export class TruckStop {
   private completeService(vehicle: Vehicle): void {
     const station = this.stations.find((s) => s.id === vehicle.wantsStation);
     const amount = station ? station.payoutFor(vehicle) : 0;
+    // Read the bay's exit route before releasing it, or the route is gone.
+    const lead = station?.bayById(vehicle.bayId ?? '')?.def.exit ?? [];
     station?.releaseBay(vehicle);
     this.docked.delete(vehicle);
 
@@ -208,7 +216,7 @@ export class TruckStop {
       this.hooks.onCashDrop?.(drop);
     }
     this.hooks.onServiceComplete?.(vehicle, amount);
-    this.sendAway(vehicle);
+    this.sendAway(vehicle, lead);
   }
 
   collect(dropIdToCollect: string, now: number): number {
@@ -235,10 +243,7 @@ export class TruckStop {
       this.queue.shift();
       this.docked.add(front);
       front.state = 'toBay';
-      front.setPath([
-        { x: bay.def.x - 10, z: bay.def.z },
-        { x: bay.def.x, z: bay.def.z },
-      ]);
+      front.setPath([...bay.def.approach, { x: bay.def.x, z: bay.def.z }]);
       this.reflowQueue();
     }
 

@@ -63,6 +63,20 @@ export type ModelId =
   | 'barrier'
   | 'streetLight'
   | 'dumpster'
+  // the city across the highway
+  | 'cityLowA'
+  | 'cityLowB'
+  | 'cityLowC'
+  | 'cityLowD'
+  | 'cityLowE'
+  | 'cityLowF'
+  | 'cityLowG'
+  | 'cityLowH'
+  | 'cityBlockA'
+  | 'cityBlockB'
+  | 'towerA'
+  | 'towerB'
+  | 'towerC'
   // people
   | 'workerA'
   | 'workerB';
@@ -116,6 +130,24 @@ const MODELS: Record<ModelId, ModelSpec> = {
   barrier: { url: 'roads/construction-fence.glb', height: 1.2 },
   streetLight: { url: 'roads/light-square.glb', height: 7 },
   dumpster: { url: 'roads/dumpster.glb', length: 3 },
+
+  // The city block. Kenney's "low detail" variants are a few hundred triangles
+  // each, which is what makes a district of them affordable; the three towers
+  // are full-detail because they carry the skyline and are always in view.
+  // Sized by height so a row of them reads as a street of even cornice lines.
+  cityLowA: { url: 'commercial/low-detail-building-a.glb', height: 15 },
+  cityLowB: { url: 'commercial/low-detail-building-b.glb', height: 18 },
+  cityLowC: { url: 'commercial/low-detail-building-c.glb', height: 13 },
+  cityLowD: { url: 'commercial/low-detail-building-d.glb', height: 16 },
+  cityLowE: { url: 'commercial/low-detail-building-e.glb', height: 12 },
+  cityLowF: { url: 'commercial/low-detail-building-f.glb', height: 20 },
+  cityLowG: { url: 'commercial/low-detail-building-g.glb', height: 14 },
+  cityLowH: { url: 'commercial/low-detail-building-h.glb', height: 17 },
+  cityBlockA: { url: 'commercial/building-a.glb', height: 13 },
+  cityBlockB: { url: 'commercial/building-c.glb', height: 15 },
+  towerA: { url: 'commercial/building-skyscraper-a.glb', height: 42 },
+  towerB: { url: 'commercial/building-skyscraper-b.glb', height: 52 },
+  towerC: { url: 'commercial/building-skyscraper-c.glb', height: 36 },
 
   workerA: { url: 'characters/character-male-b.glb', height: 1.8 },
   workerB: { url: 'characters/character-female-a.glb', height: 1.8 },

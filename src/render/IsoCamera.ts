@@ -16,7 +16,7 @@ export class IsoCamera {
   private aspectPullback = 1;
 
   constructor(aspect: number) {
-    this.camera = new PerspectiveCamera(52, aspect, 1, 400);
+    this.camera = new PerspectiveCamera(52, aspect, 1, 700);
     this.setAspect(aspect);
     this.smoothed.copy(this.target);
     this.apply();
@@ -43,17 +43,33 @@ export class IsoCamera {
     );
   }
 
+  /**
+   * The camera's right and forward vectors on the ground plane. The rig sits at
+   * `target + (sin yaw, _, cos yaw) * horizontal`, so it looks back along
+   * `-(sin yaw, cos yaw)`, and right is that turned a quarter turn.
+   */
+  private get basis(): { rightX: number; rightZ: number; fwdX: number; fwdZ: number } {
+    const cos = Math.cos(this.yaw);
+    const sin = Math.sin(this.yaw);
+    return { rightX: cos, rightZ: -sin, fwdX: -sin, fwdZ: -cos };
+  }
+
   /** Screen-space drag, in pixels, converted to movement on the ground plane. */
   pan(dxPixels: number, dyPixels: number, viewportHeight: number): void {
     // Scale so a drag moves roughly the same amount of world under the finger
     // regardless of zoom level.
     const worldPerPixel = (this.distance * this.aspectPullback * 1.1) / viewportHeight;
-    const dx = -dxPixels * worldPerPixel;
-    const dz = -dyPixels * worldPerPixel;
-    const cos = Math.cos(this.yaw);
-    const sin = Math.sin(this.yaw);
-    this.target.x += dx * cos - dz * sin;
-    this.target.z += dx * sin + dz * cos;
+    const { rightX, rightZ, fwdX, fwdZ } = this.basis;
+    // Drag the world, not the camera. The ground under the finger has to keep
+    // up with it, so the target travels the opposite way across the screen:
+    // finger right moves the target left, finger down pushes it away from the
+    // viewer. The previous version built this from a rotation of the wrong
+    // handedness, which inverted the vertical axis and made the error depend
+    // on yaw — dragging felt right at one rotation and wrong at another.
+    const along = -dxPixels * worldPerPixel;
+    const into = dyPixels * worldPerPixel;
+    this.target.x += rightX * along + fwdX * into;
+    this.target.z += rightZ * along + fwdZ * into;
     this.clampTarget();
   }
 

@@ -8,13 +8,19 @@
 
 export const WORLD = {
   /** Half-extent of the visible ground plane. */
-  groundHalf: 140,
-  /** Camera pan is clamped to this box around the stop. */
-  panLimit: { x: 44, z: 26 },
+  groundHalf: 300,
+  /**
+   * Camera pan is clamped to this box around the stop. Wide enough now to
+   * reach the city north of the highway and the hills south of the lot —
+   * clamping tight to the forecourt would have left both of them permanently
+   * off-screen.
+   */
+  panLimit: { x: 105, z: 78 },
   skyColor: 0x8fb8dc,
   groundColor: 0x6f8f4f,
-  fogNear: 70,
-  fogFar: 190,
+  /** Pushed out with the zoom range, or the far half of the view is haze. */
+  fogNear: 150,
+  fogFar: 340,
 } as const;
 
 export const HIGHWAY = {
@@ -41,6 +47,32 @@ export const HIGHWAY = {
   interactiveDespawnX: 78,
   /** Ambient (instanced, non-interactive) traffic count per quality tier. */
   ambientCount: { low: 14, medium: 26, high: 40 },
+} as const;
+
+/**
+ * The city across the highway. It is laid out as a proper street grid rather
+ * than a painted backdrop, because its traffic has to drive somewhere: cars
+ * run the avenue and the cross streets, and the blocks between them carry the
+ * buildings. Everything here is north of the highway (more negative Z), so the
+ * stop keeps the whole southern half of the world to itself.
+ */
+export const CITY = {
+  /** The avenue running parallel to the highway, and its width. */
+  avenueZ: -48,
+  roadWidth: 11,
+  /** Cross streets, evenly spaced across this X range. */
+  spanX: 132,
+  streetCount: 7,
+  /** How far back the grid runs from the avenue. */
+  depth: 108,
+  /** Depth between cross-street junctions. */
+  blockDepth: 36,
+  /** Buildings per block, per quality tier. */
+  density: { low: 2, medium: 3, high: 4 },
+  /** Cars on the city streets, per quality tier. */
+  traffic: { low: 8, medium: 16, high: 26 },
+  /** Rows nearer than this to the avenue stay low, so the skyline steps up. */
+  towerFromRow: 2,
 } as const;
 
 export type VehicleKind = 'truck' | 'car' | 'van' | 'hauler';
@@ -101,8 +133,28 @@ export interface BayDef {
   /** Where the vehicle parks. */
   x: number;
   z: number;
-  /** Facing in radians; 0 points along +X. */
+  /**
+   * Facing in radians once parked; 0 points along +X, negative turns toward +Z.
+   * Descriptive rather than enforced — a vehicle ends up facing whichever way
+   * its last leg of approach pointed — but it documents the intended layout.
+   */
   heading: number;
+  /**
+   * Points driven between the front of the queue and the bay, and between the
+   * bay and the shared exit lane. These are authored rather than derived: the
+   * old code guessed an approach at `bay.x - 10`, which for the second canteen
+   * bay landed exactly on the first one, so arriving vehicles drove through
+   * whoever was parked there. Routes are laid out so that no route passes
+   * through another bay; where two routes genuinely cross, the separation rule
+   * in `sim/separation.ts` makes one give way.
+   */
+  approach: Waypoint[];
+  exit: Waypoint[];
+}
+
+export interface Waypoint {
+  x: number;
+  z: number;
 }
 
 export interface StationDef {
@@ -122,6 +174,17 @@ export interface StationDef {
   startUnlocked: boolean;
 }
 
+/** The service aisle the canteen bays are entered from, north of the bays. */
+const CANTEEN_AISLE_Z = -7;
+/**
+ * Where the aisle begins. Kept east of the point the fuel lanes turn off at, so
+ * the aisle and the fuel lanes only ever cross — they never run in parallel
+ * close enough for two vehicles to clip each other.
+ */
+const CANTEEN_AISLE_START = 4;
+/** Where every bay's exit route rejoins the common run back to the highway. */
+const EXIT_MERGE = { x: 6, z: -17 };
+
 export const STATIONS: StationDef[] = [
   {
     id: 'fuel',
@@ -134,9 +197,25 @@ export const STATIONS: StationDef[] = [
     payout: 26,
     startUnlocked: true,
     // The bays sit either side of the pump island, under the canopy.
+    // Two drive-through lanes, one either side of the pump island. Each lane
+    // has its own Z, so a vehicle heading for one never crosses the other.
     bays: [
-      { id: 'fuel-1', x: -9, z: -4.5, heading: 0 },
-      { id: 'fuel-2', x: -9, z: 4.5, heading: 0 },
+      {
+        id: 'fuel-1',
+        x: -9,
+        z: -4.5,
+        heading: 0,
+        approach: [{ x: -19, z: -4.5 }],
+        exit: [{ x: 0, z: -4.5 }, EXIT_MERGE],
+      },
+      {
+        id: 'fuel-2',
+        x: -9,
+        z: 4.5,
+        heading: 0,
+        approach: [{ x: -19, z: 4.5 }],
+        exit: [{ x: 0, z: 4.5 }, EXIT_MERGE],
+      },
     ],
   },
   {
@@ -149,15 +228,57 @@ export const STATIONS: StationDef[] = [
     serviceTime: 7.5,
     payout: 88,
     startUnlocked: false,
+    // Perpendicular parking off a shared aisle north of the bays: drive east
+    // along the aisle, turn in at your own X, and back out onto it to leave.
+    // Both spurs sit east of where the fuel lanes end, so turning in never
+    // clips a vehicle at the pumps.
     bays: [
-      { id: 'canteen-1', x: 9, z: -1, heading: 0 },
-      { id: 'canteen-2', x: 18, z: -1, heading: 0 },
+      {
+        id: 'canteen-1',
+        x: 9,
+        z: -1,
+        heading: -Math.PI / 2,
+        approach: [
+          { x: CANTEEN_AISLE_START, z: CANTEEN_AISLE_Z },
+          { x: 9, z: CANTEEN_AISLE_Z },
+        ],
+        exit: [
+          { x: 9, z: CANTEEN_AISLE_Z },
+          { x: 26, z: CANTEEN_AISLE_Z },
+        ],
+      },
+      {
+        id: 'canteen-2',
+        x: 18,
+        z: -1,
+        heading: -Math.PI / 2,
+        approach: [
+          { x: CANTEEN_AISLE_START, z: CANTEEN_AISLE_Z },
+          { x: 18, z: CANTEEN_AISLE_Z },
+        ],
+        exit: [
+          { x: 18, z: CANTEEN_AISLE_Z },
+          { x: 26, z: CANTEEN_AISLE_Z },
+        ],
+      },
     ],
   },
   // Extension point: a repair & wash station drops in here with kind:'repair',
   // a slower serviceTime and a much larger payout. RepairWashStation only needs
   // a mesh builder and an upgrade entry to become real.
 ];
+
+/**
+ * Bounding length of each vehicle kind, used by the separation pass to decide
+ * how much room one needs behind another. Kept next to the other tuning rather
+ * than derived from the mesh: the sim must not depend on the render layer.
+ */
+export const VEHICLE_FOOTPRINT: Record<VehicleKind, number> = {
+  truck: 8.6,
+  hauler: 9,
+  van: 6,
+  car: 5,
+};
 
 export const SERVICE = {
   /** Seconds of held touch needed to complete one unit of manual work. */
@@ -168,9 +289,22 @@ export const SERVICE = {
   speedStep: 0.82,
   /** Queue slots per level. */
   queueSlots: [3, 5, 7],
-  /** Front of the waiting line; the queue extends west from here. */
-  queueStart: { x: -18, z: -10 },
-  queueSpacing: 7,
+  /**
+   * Front of the waiting line; the queue extends west from here. The forecourt
+   * is laid out as parallel corridors running away from the highway — exit
+   * lane, queue, canteen aisle, then the two fuel lanes — spaced so that two
+   * vehicles in neighbouring corridors clear each other. Routes may cross, and
+   * the separation pass handles that; what it cannot fix is two lanes running
+   * alongside each other close enough to overlap, so the spacing here matters.
+   */
+  queueStart: { x: -18, z: -12 },
+  /**
+   * Nose-to-tail spacing in the waiting line. Must clear the longest vehicle in
+   * `VEHICLE_FOOTPRINT` (a 9m hauler) or the queue packs vehicles into each
+   * other — which no amount of separation logic can fix, because a queued
+   * vehicle has arrived and is not going to move out of the way.
+   */
+  queueSpacing: 11.5,
   /** A driver who waits this long without being served gives up and leaves. */
   patienceSeconds: 55,
 } as const;
@@ -275,9 +409,16 @@ export const SAVE = {
 export const CAMERA = {
   pitch: 0.78,
   minZoom: 26,
-  maxZoom: 78,
-  startZoom: 62,
-  startTarget: { x: -6, z: -4 },
+  /**
+   * The stop used to fill the frame at every zoom level, which made every
+   * object read as oversized — the proportions between them were right (a 7m
+   * tree beside an 8.6m truck is correct), but with nothing else in view there
+   * was nothing to judge them against. Pulling the far end of the range well
+   * back, and starting further out, gives the same models a base to sit on.
+   */
+  maxZoom: 135,
+  startZoom: 96,
+  startTarget: { x: -2, z: -6 },
   /**
    * A tall phone screen sees far less of the ground at a given distance than a
    * wide one, so the rig pulls back on narrow aspect ratios. Without this the

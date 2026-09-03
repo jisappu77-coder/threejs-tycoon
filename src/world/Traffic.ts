@@ -2,6 +2,7 @@ import { Group, InstancedMesh, Object3D, Scene } from 'three';
 import { HIGHWAY, VEHICLES, type VehicleKind } from '../data/config';
 import type { Rng } from '../core/Rng';
 import { Vehicle } from '../sim/Vehicle';
+import { applySeparation } from '../sim/separation';
 import type { TruckStop } from '../sim/TruckStop';
 import { VEHICLE_LENGTH, buildVehicle, type VehicleParts } from '../render/meshes/vehicles';
 import { ProgressBar } from '../render/meshes/indicators';
@@ -23,6 +24,8 @@ interface VehicleView {
 
 const KINDS = Object.keys(VEHICLES) as VehicleKind[];
 const MAX_INTERACTIVE = 12;
+/** Road that must be empty ahead of the spawn point before a vehicle appears. */
+const SPAWN_CLEARANCE = 16;
 
 /**
  * The far lane used to be a tinted rounded box — the single most obviously
@@ -81,17 +84,28 @@ export class Traffic {
     this.ambientLane = [];
 
     // Deal positions out along the road in even slices with jitter rather than
-    // at random: pure random placement puts cars inside each other often
-    // enough to be noticed every few seconds.
+    // at random: pure random placement puts cars inside each other immediately.
+    //
+    // Every car in a lane then runs at that lane's single speed. Giving each
+    // one its own speed looked better for the first few seconds and then fell
+    // apart — a faster car slowly reels in the one ahead and drives through it,
+    // which is exactly the overlap that gets noticed. These cars are scenery
+    // with no separation logic of their own, so the spacing has to be a
+    // property of how they move, not something maintained after the fact.
     const westbound = Math.round(count * 0.6);
+    const laneSpeed = { '-1': this.rng.range(17, 20), '1': this.rng.range(15, 18) };
     for (let i = 0; i < count; i++) {
       const lane = i < westbound ? -1 : 1;
       const n = lane < 0 ? westbound : count - westbound;
       const index = lane < 0 ? i : i - westbound;
       const slice = (HIGHWAY.spanX * 2) / Math.max(n, 1);
+      // Jitter is capped at 15% of a slice either way, so two neighbours are
+      // never closer than 70% of a slice. At the busiest tier that is 10.1
+      // units in the tighter lane, which clears the 8.6-unit box truck — the
+      // longest model in the ambient pool.
       const centre = -HIGHWAY.spanX + slice * (index + 0.5);
-      this.ambientX.push(centre + this.rng.range(-slice * 0.3, slice * 0.3));
-      this.ambientSpeed.push(this.rng.range(16, 20));
+      this.ambientX.push(centre + this.rng.range(-slice * 0.15, slice * 0.15));
+      this.ambientSpeed.push(lane < 0 ? laneSpeed['-1'] : laneSpeed['1']);
       this.ambientLane.push(lane);
     }
 
@@ -128,6 +142,15 @@ export class Traffic {
 
   private spawn(): void {
     if (this.vehicles.length >= MAX_INTERACTIVE) return;
+    // Never drop a vehicle on top of one that has not cleared the spawn point.
+    // Now that traffic keeps its distance, a stacked spawn does not resolve
+    // itself — the pair simply sit there blocking the lane behind them.
+    const clear = this.vehicles.every(
+      (v) =>
+        v.state !== 'cruising' ||
+        Math.abs(v.x - HIGHWAY.interactiveSpawnX) > SPAWN_CLEARANCE,
+    );
+    if (!clear) return;
     const kind = this.rng.weighted(KINDS, (k) => VEHICLES[k].weight);
     const v = new Vehicle(
       kind,
@@ -185,6 +208,10 @@ export class Traffic {
       this.spawnTimer = HIGHWAY.spawnInterval * this.rng.range(0.7, 1.4);
       this.spawn();
     }
+
+    // Decide who has to give way before anyone moves, so the decision is made
+    // from one consistent snapshot rather than from half-updated positions.
+    applySeparation(this.vehicles);
 
     for (let i = this.vehicles.length - 1; i >= 0; i--) {
       const v = this.vehicles[i]!;

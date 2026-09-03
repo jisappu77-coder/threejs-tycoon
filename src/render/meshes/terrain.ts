@@ -1,6 +1,8 @@
 import {
   BackSide,
+  BufferGeometry,
   Color,
+  Float32BufferAttribute,
   Group,
   InstancedMesh,
   Matrix4,
@@ -21,20 +23,143 @@ import {
   tiled,
 } from '../textures';
 import { surfaceMaterial } from '../surfaces';
-import { HIGHWAY, WORLD } from '../../data/config';
+import { CITY, HIGHWAY, WORLD } from '../../data/config';
 import type { Rng } from '../../core/Rng';
 import { meshOf, type ModelId } from '../assets';
 
 /** Textured ground plane. Still one quad — it is always fully covered. */
+/**
+ * Height of the ground at a world position.
+ *
+ * The playable middle of the map — the forecourt, the highway and the city —
+ * is exactly flat, because every road, bay and building in the game is placed
+ * at y=0 and none of them are built to follow a slope. The hills only start
+ * once the ground is past all of that, and they ramp in over a wide band so
+ * the join never shows as a crease.
+ *
+ * A pure function rather than baked vertex data, so scenery, the off-road
+ * track and the ground mesh all agree on where the surface is.
+ */
+export function terrainHeight(x: number, z: number): number {
+  const mask = Math.max(
+    ramp(z, FLAT_SOUTH, HILLS_SOUTH),
+    ramp(Math.abs(x), FLAT_SIDE, HILLS_SIDE),
+    ramp(z, CITY_EDGE, CITY_EDGE - 70),
+  );
+  if (mask <= 0) return 0;
+  // Three octaves at deliberately unrelated frequencies: two at similar scales
+  // would beat against each other and produce visible repeating ridges.
+  const h =
+    Math.sin(x * 0.021) * Math.cos(z * 0.017) * 18 +
+    Math.sin(x * 0.045 + 1.7) * Math.cos(z * 0.038 + 0.6) * 9 +
+    Math.sin((x + z) * 0.012) * 12;
+  // The constant lifts the whole field so ridges dominate and dips stay
+  // shallow: a deep hollow next to the flat lot reads as a quarry, not a
+  // valley. First attempt was a third of this amplitude and, across a view
+  // three hundred units wide, was indistinguishable from flat ground.
+  return (h + 30) * mask;
+}
+
+/** Where the flat playable ground ends and the hills begin. */
+const FLAT_SOUTH = 42;
+const HILLS_SOUTH = 86;
+const FLAT_SIDE = 92;
+const HILLS_SIDE = 156;
+const CITY_EDGE = CITY.avenueZ - CITY.depth - 12;
+
+/** Smooth 0..1 ramp between two bounds, in either direction. */
+function ramp(value: number, from: number, to: number): number {
+  const t = (value - from) / (to - from);
+  const c = Math.min(1, Math.max(0, t));
+  return c * c * (3 - 2 * c);
+}
+
 export function buildGround(): Mesh {
   const size = WORLD.groundHalf * 2;
-  const g = new PlaneGeometry(size, size, 1, 1);
+  // Enough subdivision to carry a hill silhouette without the mesh becoming a
+  // meaningful share of the frame's triangles: this is ~20k, against ~200k for
+  // a built-out scene at the high tier.
+  const g = new PlaneGeometry(size, size, 100, 100);
   g.rotateX(-Math.PI / 2);
+  const pos = g.attributes.position!;
+  for (let i = 0; i < pos.count; i++) {
+    pos.setY(i, terrainHeight(pos.getX(i), pos.getZ(i)));
+  }
+  pos.needsUpdate = true;
+  g.computeVertexNormals();
   // Procedural grass on purpose — see the note in surfaces.ts about why the
   // photographic ground sets were rejected here.
   const m = new Mesh(g, texMat(grassTexture(), 0xffffff));
   m.receiveShadow = true;
   m.position.y = -0.02;
+  return m;
+}
+
+/**
+ * A dirt track leaving the back of the lot and winding away into the hills.
+ * Built as a ribbon that samples `terrainHeight`, so it drapes over the slopes
+ * instead of cutting through them.
+ */
+/** Centre line of the off-road track at a given Z. */
+export function trackX(z: number): number {
+  const t = (z - (FLAT_SOUTH - 8)) / 150;
+  return 12 + Math.sin(t * 3.1) * 26 + t * 14;
+}
+
+export function buildOffRoadTrack(): Mesh {
+  const steps = 90;
+  const halfWidth = 3.6;
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const z = FLAT_SOUTH - 8 + t * 150;
+    // A lazy S, so the track reads as following the ground rather than ruled.
+    const x = trackX(z);
+    // Tangent, for a ribbon that stays the same width through the bends.
+    const dz = 150 / steps;
+    const dx = (Math.cos(t * 3.1) * 3.1 * 26 + 14) / steps;
+    const len = Math.hypot(dx, dz) || 1;
+    const nx = dz / len;
+    const nz = -dx / len;
+    for (const side of [-1, 1]) {
+      const px = x + nx * halfWidth * side;
+      const pz = z + nz * halfWidth * side;
+      // Lifted clear of the ground mesh: the two surfaces are sampled at
+      // different resolutions, so they would otherwise fight over the slopes.
+      positions.push(px, terrainHeight(px, pz) + 0.16, pz);
+      uvs.push(side > 0 ? 1 : 0, t * 26);
+    }
+    if (i > 0) {
+      const a = (i - 1) * 2;
+      indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+    }
+  }
+
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(positions, 3));
+  g.setAttribute('uv', new Float32BufferAttribute(uvs, 2));
+  g.setIndex(indices);
+  g.computeVertexNormals();
+  // The ribbon is generated, so its winding depends on which way the path
+  // happens to curve. Rather than reason about it, check the result: if the
+  // surface ended up facing the ground it is backface-culled and invisible
+  // from above, which is exactly how this first shipped.
+  const normals = g.attributes.normal!;
+  if (normals.getY(0) < 0) {
+    const index = g.getIndex()!;
+    for (let i = 0; i < index.count; i += 3) {
+      const b = index.getX(i + 1);
+      index.setX(i + 1, index.getX(i + 2));
+      index.setX(i + 2, b);
+    }
+    index.needsUpdate = true;
+    g.computeVertexNormals();
+  }
+  const m = new Mesh(g, texMat(dirtTexture(), 0xffffff));
+  m.receiveShadow = true;
   return m;
 }
 
@@ -193,26 +318,19 @@ function edgeKerb(
  */
 export function buildBoundary(rng: Rng): Group {
   const g = new Group();
-  const ring = 78;
-  for (let i = 0; i < 30; i++) {
-    const a = (i / 30) * Math.PI * 2 + rng.range(-0.06, 0.06);
-    const r = ring + rng.range(-10, 16);
-    const s = rng.range(7, 16);
-    const hill = new Mesh(
-      sphere(s, 8),
-      mat(rng.chance(0.5) ? PALETTE.hill : PALETTE.hillFar),
-    );
-    hill.position.set(Math.cos(a) * r, -s * rng.range(0.45, 0.62), Math.sin(a) * r);
-    hill.scale.y = rng.range(0.5, 0.8);
-    g.add(hill);
-  }
-  for (let i = 0; i < 14; i++) {
-    const a = (i / 14) * Math.PI * 2 + rng.range(-0.2, 0.2);
-    const r = 120 + rng.range(-14, 14);
-    const h = rng.range(24, 44);
-    const radius = rng.range(16, 27);
+  // The close ring of dome hills this used to draw is gone: the ground mesh is
+  // displaced now, so it makes its own rolling hills, and the two together
+  // fought — domes punched up through the city and through the hillsides.
+  // What is left is a far mountain ring, placed outside everything the player
+  // can drive to, purely to give the horizon a silhouette.
+  const ring = 235;
+  for (let i = 0; i < 18; i++) {
+    const a = (i / 18) * Math.PI * 2 + rng.range(-0.16, 0.16);
+    const r = ring + rng.range(-22, 22);
+    const h = rng.range(34, 62);
+    const radius = rng.range(24, 40);
     const mtn = new Mesh(cone(radius, h, 6), mat(PALETTE.rock));
-    mtn.position.set(Math.cos(a) * r, h / 2 - 5, Math.sin(a) * r);
+    mtn.position.set(Math.cos(a) * r, h / 2 - 6, Math.sin(a) * r);
     g.add(mtn);
     // Snow cap: a smaller cone riding the peak.
     const cap = new Mesh(cone(radius * 0.36, h * 0.3, 6), mat(PALETTE.snow));
@@ -248,7 +366,13 @@ export function buildScatter(rng: Rng, treeCount: number): Group {
   const free = (x: number, z: number): boolean => {
     const nearRoad = Math.abs(z - HIGHWAY.z) < HIGHWAY.width / 2 + 6;
     const onApron = x > -64 && x < 36 && z > -20 && z < 20;
-    return !nearRoad && !onApron;
+    // Keep the off-road track clear, so it stays drivable-looking rather than
+    // sprouting a pine in the middle of it.
+    const onTrack = z > FLAT_SOUTH - 12 && Math.abs(x - trackX(z)) < 7;
+    // The city has its own street trees; scattering woodland over it drops
+    // pines through the middle of office blocks.
+    const inCity = z < CITY.avenueZ + 14;
+    return !nearRoad && !onApron && !inCity && !onTrack;
   };
 
   const dummy = new Object3D();
@@ -261,9 +385,12 @@ export function buildScatter(rng: Rng, treeCount: number): Group {
     let guard = 0;
     while (placements.length < layer.count && guard++ < layer.count * 12) {
       const x = rng.range(-WORLD.groundHalf * 0.62, WORLD.groundHalf * 0.62);
-      const z = rng.range(-WORLD.groundHalf * 0.62, WORLD.groundHalf * 0.62);
+      // Biased south: everything north of the highway is city now.
+      const z = rng.range(CITY.avenueZ + 14, WORLD.groundHalf * 0.62);
       if (!free(x, z)) continue;
-      dummy.position.set(x, 0, z);
+      // Sit on the ground rather than at y=0, or everything on a hillside
+      // floats or sinks depending on which way the slope runs.
+      dummy.position.set(x, terrainHeight(x, z), z);
       dummy.rotation.y = rng.range(0, Math.PI * 2);
       dummy.scale.setScalar(rng.range(layer.scale[0], layer.scale[1]));
       dummy.updateMatrix();

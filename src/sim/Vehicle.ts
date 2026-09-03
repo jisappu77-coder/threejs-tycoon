@@ -1,4 +1,6 @@
-import { VEHICLES, type VehicleKind, type VehicleSpec } from '../data/config';
+import { VEHICLES, type VehicleKind, type VehicleSpec, type Waypoint } from '../data/config';
+
+export type { Waypoint };
 
 export type VehicleState =
   /** On the highway, not (yet) a customer. */
@@ -15,11 +17,6 @@ export type VehicleState =
   | 'leaving'
   /** Off the far end of the highway; ready to be recycled. */
   | 'done';
-
-export interface Waypoint {
-  x: number;
-  z: number;
-}
 
 let nextId = 1;
 
@@ -55,6 +52,13 @@ export class Vehicle {
 
   /** Set once the stop has had its chance to pull this vehicle in. */
   offered = false;
+
+  /**
+   * Set each step by the separation pass when the road ahead is blocked. A
+   * yielding vehicle holds its position and heading rather than driving into
+   * the back of whoever is in front of it.
+   */
+  yielding = false;
 
   /** Attached by the view layer; the sim never reads it. */
   view: unknown = null;
@@ -108,12 +112,14 @@ export class Vehicle {
     }
 
     if (this.state === 'cruising' && this.waypoints.length === 0) {
+      if (this.yielding) return;
       this.x += this.spec.speed * dt;
       this.heading = 0;
       return;
     }
 
     if (this.state === 'queued') this.patience += dt;
+    if (this.yielding) return;
 
     const target = this.waypoints[0];
     if (!target) return;
